@@ -13,12 +13,10 @@ using UnityEngine;
 namespace DIYLevelFastInit
 {
     /// <summary>
-    /// 替换 OC2DIYLevel 的 DIYLevelAssetBundleManager.Initialize()：
-    /// 原版在主菜单读档（MetaGameProgress.ByteLoad）时同步串行加载全部 common* 包
-    /// 和 levels/ 下每个关卡集的 info 包（353MB），主线程冻结 20 秒以上。
-    /// 本插件把廉价部分（common 主包 + 静态字段 + DLC 数据）保持同步，
-    /// 其余 common* 依赖包与全部 info 包改为协程 + LoadFromFileAsync 后台加载，
-    /// 并顺手修掉原版缺少的幂等保护（二次 ByteLoad 会整个重载一遍）。
+    /// Replaces DIYLevelAssetBundleManager.Initialize(): the cheap part (common bundle,
+    /// static fields, DLC data) stays synchronous, while the common* dependency bundles
+    /// and all level-set info bundles load in a background coroutine. Also fixes the
+    /// original's missing idempotence guard.
     /// </summary>
     [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
     [BepInProcess("Overcooked2.exe")]
@@ -71,7 +69,6 @@ namespace DIYLevelFastInit
             Log.LogInfo("DIYLevel FastInit ready: level bundles load async, menu no longer blocks.");
         }
 
-        /// <summary>右上角进度角标：后台加载期间显示 DIY levels loading N/M。</summary>
         private void OnGUI()
         {
             if (!Loading || TotalSets <= 0)
@@ -101,9 +98,9 @@ namespace DIYLevelFastInit
             }
         }
 
-        /// <summary>原版 AddLevelSetSelectionUI 只在菜单首次创建时读取 levelSetInfos（有
-        /// if(menu!=null) return 守卫），异步加载后补进的关卡集永远不会出现在按钮里。
-        /// 这里在每次 AddUI 之后对比数量，不一致就清空重建按钮列表。</summary>
+        // The original builds the level-set button list only when the menu is first created
+        // (if (menu != null) return), so sets that finish loading later never show up;
+        // re-sync the buttons after every AddUI call.
         private static void AddUIPostfix()
         {
             HealLevelSetButtons();
@@ -121,7 +118,7 @@ namespace DIYLevelFastInit
                 FrontendOptionsMenu menu = FiSetMenu.GetValue(null) as FrontendOptionsMenu;
                 if (menu == null)
                 {
-                    return; // 菜单尚未创建，AddUI 内部会用当前列表全新构建
+                    return; // menu not created yet; AddUI itself will build it from the current list
                 }
                 if (_builtCount == infos.Count)
                 {
@@ -142,7 +139,6 @@ namespace DIYLevelFastInit
             }
         }
 
-        /// <summary>加载过程中每新增一个关卡集调用：若菜单已打开则以追加方式补按钮（不清空、不闪烁）。</summary>
         internal static void NotifySetAdded()
         {
             try
@@ -173,7 +169,6 @@ namespace DIYLevelFastInit
             }
         }
 
-        /// <summary>把"更多关卡"菜单标题改成带进度的形式，加载完成后还原。</summary>
         private static void UpdateMenuHeaderProgress(FrontendOptionsMenu menu)
         {
             try
@@ -205,7 +200,6 @@ namespace DIYLevelFastInit
             }
         }
 
-        /// <summary>加载收尾：关掉角标并把菜单标题还原为"更多关卡"。</summary>
         internal static void FinishLoading()
         {
             Loading = false;
@@ -222,12 +216,13 @@ namespace DIYLevelFastInit
             }
         }
 
-        /// <summary>Harmony Prefix：返回 false 跳过原版 Initialize，改走本插件的实现。</summary>
+        // Harmony prefix: returns false to skip the original Initialize and run ours instead.
         private static bool InitializePrefix()
         {
             if (_started)
             {
-                // 原版没有幂等保护：再次 ByteLoad 会把 353MB 全部重载一遍（info 包还会重复入列）。
+                // The original has no idempotence guard: a second ByteLoad would reload
+                // all 353 MB again (and duplicate the info entries in levelSetInfos).
                 return false;
             }
             _started = true;
@@ -236,7 +231,7 @@ namespace DIYLevelFastInit
                 string pluginDir = GetDiyPluginDir();
                 if (!RunCheapInit(pluginDir))
                 {
-                    // 与原版失败条件一致（缺 common 文件等）；放行下次重试。
+                    // Same failure conditions as the original (missing common file etc.); allow a retry.
                     _started = false;
                     return false;
                 }
@@ -252,15 +247,15 @@ namespace DIYLevelFastInit
             return false;
         }
 
-        /// <summary>原版用 Assembly.GetExecutingAssembly().Location 定位插件目录；
-        /// 在本插件里执行会指向错误的目录，必须解析 OC2DIYLevel.dll 自身的位置。</summary>
+        // Must resolve OC2DIYLevel.dll's own location: GetExecutingAssembly() here would
+        // point at this plugin's directory instead.
         private static string GetDiyPluginDir()
         {
             return Path.GetDirectoryName(typeof(DIYLevelAssetBundleManager).Assembly.Location);
         }
 
-        /// <summary>同步完成原版 Initialize 中廉价的部分（原版第 50-68 行、105-116 行）。
-        /// 完成后 IsInitialized 即为 true，所有消费方补丁的行为与原版一致。</summary>
+        // The cheap part of the original Initialize: once done, IsInitialized is true and
+        // every consumer patch behaves exactly as with the original.
         private static bool RunCheapInit(string pluginDir)
         {
             DIYLevelAssetBundleManager prevInst = FiInstance.GetValue(null) as DIYLevelAssetBundleManager;
@@ -303,9 +298,6 @@ namespace DIYLevelFastInit
         }
     }
 
-    /// <summary>协程宿主：逐包异步加载 common* 依赖包与各关卡集 info 包。
-    /// 每步带日志；宿主被销毁时协程会无声死亡，OnDestroy 负责把这件事暴露出来；
-    /// 异步请求超过超时时间仍未完成时回退到同步加载（原版已证明可行）。</summary>
     internal class FastInitHost : MonoBehaviour
     {
         private sealed class PendingSet
@@ -362,8 +354,9 @@ namespace DIYLevelFastInit
             }
         }
 
-        /// <summary>轮询等待异步请求（供外层协程用 wait.Current 转发 yield），超时后放弃等待，
-        /// 由调用方检查 isDone 并回退同步路径。</summary>
+        // Polls an async operation; the outer coroutine forwards wait.Current as its own
+        // yield. Gives up after the timeout — the caller then checks isDone and falls
+        // back to the sync path.
         private static IEnumerator WaitOp(AsyncOperation op, string what)
         {
             float start = Time.realtimeSinceStartup;
@@ -382,8 +375,9 @@ namespace DIYLevelFastInit
         {
             FastInitPlugin.Loading = true;
             FastInitPlugin.Log.LogInfo("LoadHeavy started");
-            // WLoader 等插件可能已把 commonW1/commonW2 常驻内存；跳过可以省去
-            // 读取整个文件后才发现重复的那 1-2 秒。
+            // Plugins like WLoader may already keep commonW1/commonW2 resident in memory;
+            // skipping them saves the 1-2 seconds of reading the whole file just to be
+            // rejected as a duplicate by Unity.
             HashSet<string> alreadyLoaded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (AssetBundle ab in AssetBundle.GetAllLoadedAssetBundles())
             {
@@ -430,8 +424,9 @@ namespace DIYLevelFastInit
             }
             FastInitPlugin.Log.LogInfo("common bundles: " + loaded + " loaded, " + skipped + " skipped (dup), " + failed + " failed");
 
-            // 并行预取：一次性把所有 info 包的文件读取排进工作线程（每帧发一个请求），
-            // 再按目录顺序消费——磁盘读取时间重叠，总耗时远低于逐包串行。
+            // Parallel prefetch: queue the file reads of all info bundles onto worker threads
+            // at once (one request per frame), then consume them in directory order —
+            // disk read times overlap, far faster than one-by-one serial loading.
             List<PendingSet> pending = new List<PendingSet>();
             foreach (DirectoryInfo dir in SafeGetDirs(Path.Combine(pluginDir, "levels")))
             {
@@ -509,8 +504,9 @@ namespace DIYLevelFastInit
             FastInitPlugin.FinishLoading();
             FastInitPlugin.Log.LogInfo("FastInit complete: " + sets + " level sets available");
 
-            // 加载完成后若在前端场景，补一次 AddUI 让菜单立即拿到完整列表；
-            // Postfix 自愈会清掉旧的按钮快照并重建。之后每次进入 DLC 菜单也会自检。
+            // If we are in the frontend scene when loading completes, call AddUI once so the
+            // menu picks up the full list immediately; the postfix heal rebuilds the stale
+            // button snapshot. Every later DLC-menu entry self-checks as well.
             try
             {
                 GameObject frontend = GameObject.Find("/Frontend/FrontendParent/FrontendRootMenu");
