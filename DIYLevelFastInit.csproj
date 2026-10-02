@@ -8,6 +8,8 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <DebugType>none</DebugType>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <!-- 游戏安装目录。可在命令行覆盖：dotnet build -p:GameDir="C:\...\Overcooked! 2" -->
+    <GameDir Condition="'$(GameDir)' == ''">D:\Games\Steam Games\steamapps\common\Overcooked! 2</GameDir>
   </PropertyGroup>
 
   <ItemGroup>
@@ -16,47 +18,47 @@
 
   <ItemGroup>
     <Reference Include="BepInEx">
-      <HintPath>D:\Games\Steam Games\steamapps\common\Overcooked! 2\BepInEx\core\BepInEx.dll</HintPath>
+      <HintPath>$(GameDir)\BepInEx\core\BepInEx.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="0Harmony">
-      <HintPath>D:\Games\Steam Games\steamapps\common\Overcooked! 2\BepInEx\core\0Harmony.dll</HintPath>
+      <HintPath>$(GameDir)\BepInEx\core\0Harmony.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine">
-      <HintPath>D:\Games\Steam Games\steamapps\common\Overcooked! 2\Overcooked2_Data\Managed\UnityEngine.dll</HintPath>
+      <HintPath>$(GameDir)\Overcooked2_Data\Managed\UnityEngine.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.CoreModule">
-      <HintPath>D:\Games\Steam Games\steamapps\common\Overcooked! 2\Overcooked2_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
+      <HintPath>$(GameDir)\Overcooked2_Data\Managed\UnityEngine.CoreModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.AssetBundleModule">
-      <HintPath>D:\Games\Steam Games\steamapps\common\Overcooked! 2\Overcooked2_Data\Managed\UnityEngine.AssetBundleModule.dll</HintPath>
+      <HintPath>$(GameDir)\Overcooked2_Data\Managed\UnityEngine.AssetBundleModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.IMGUIModule">
-      <HintPath>D:\Games\Steam Games\steamapps\common\Overcooked! 2\Overcooked2_Data\Managed\UnityEngine.IMGUIModule.dll</HintPath>
+      <HintPath>$(GameDir)\Overcooked2_Data\Managed\UnityEngine.IMGUIModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.TextRenderingModule">
-      <HintPath>D:\Games\Steam Games\steamapps\common\Overcooked! 2\Overcooked2_Data\Managed\UnityEngine.TextRenderingModule.dll</HintPath>
+      <HintPath>$(GameDir)\Overcooked2_Data\Managed\UnityEngine.TextRenderingModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.UI">
-      <HintPath>D:\Games\Steam Games\steamapps\common\Overcooked! 2\Overcooked2_Data\Managed\UnityEngine.UI.dll</HintPath>
+      <HintPath>$(GameDir)\Overcooked2_Data\Managed\UnityEngine.UI.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="Assembly-CSharp">
-      <HintPath>D:\Games\Steam Games\steamapps\common\Overcooked! 2\Overcooked2_Data\Managed\Assembly-CSharp.dll</HintPath>
+      <HintPath>$(GameDir)\Overcooked2_Data\Managed\Assembly-CSharp.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="OC2DIYLevel">
-      <HintPath>D:\Games\Steam Games\steamapps\common\Overcooked! 2\BepInEx\plugins\OC2DIYLevel\OC2DIYLevel.dll</HintPath>
+      <HintPath>$(GameDir)\BepInEx\plugins\OC2DIYLevel\OC2DIYLevel.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="LevelEditorStub">
-      <HintPath>D:\Games\Steam Games\steamapps\common\Overcooked! 2\BepInEx\plugins\OC2DIYLevel\LevelEditorStub.dll</HintPath>
+      <HintPath>$(GameDir)\BepInEx\plugins\OC2DIYLevel\LevelEditorStub.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>
