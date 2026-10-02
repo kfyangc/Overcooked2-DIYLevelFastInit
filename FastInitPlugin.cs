@@ -27,7 +27,7 @@ namespace DIYLevelFastInit
     {
         public const string PluginGuid = "yang.oc2.diylevel.fastinit";
         public const string PluginName = "DIYLevel FastInit";
-        public const string PluginVersion = "1.2.0";
+        public const string PluginVersion = "1.3.0";
 
         internal static ManualLogSource Log;
 
@@ -42,6 +42,11 @@ namespace DIYLevelFastInit
         private static readonly MethodInfo MiAddSetButton = AccessTools.Method(typeof(DIYLevelEntryUI), "AddLevelSetButton");
 
         private static int _builtCount;
+
+        internal static bool Loading;
+        internal static int TotalSets;
+
+        private static GUIStyle _progressStyle;
 
         private void Awake()
         {
@@ -64,6 +69,36 @@ namespace DIYLevelFastInit
                 Log.LogWarning("AddUI heal patch not applied (member missing): menu may need re-entry to show late-loaded sets");
             }
             Log.LogInfo("DIYLevel FastInit ready: level bundles load async, menu no longer blocks.");
+        }
+
+        /// <summary>右上角进度角标：后台加载期间显示 DIY levels loading N/M。</summary>
+        private void OnGUI()
+        {
+            if (!Loading || TotalSets <= 0)
+            {
+                return;
+            }
+            try
+            {
+                if (_progressStyle == null)
+                {
+                    _progressStyle = new GUIStyle(GUI.skin.label);
+                    _progressStyle.fontSize = 18;
+                    _progressStyle.fontStyle = FontStyle.Bold;
+                    _progressStyle.alignment = TextAnchor.UpperRight;
+                }
+                List<KeyValuePair<string, LevelSetInfoSO>> infos = DIYLevelAssetBundleManager.levelSetInfos;
+                int done = (infos != null) ? infos.Count : 0;
+                string text = "DIY levels loading " + done + "/" + TotalSets;
+                Rect rect = new Rect(Screen.width - 336, 6, 330, 26);
+                _progressStyle.normal.textColor = Color.black;
+                GUI.Label(new Rect(rect.x + 2f, rect.y + 2f, rect.width, rect.height), text, _progressStyle);
+                _progressStyle.normal.textColor = Color.white;
+                GUI.Label(rect, text, _progressStyle);
+            }
+            catch (Exception)
+            {
+            }
         }
 
         /// <summary>原版 AddLevelSetSelectionUI 只在菜单首次创建时读取 levelSetInfos（有
@@ -99,10 +134,91 @@ namespace DIYLevelFastInit
                 }
                 _builtCount = infos.Count;
                 Log.LogInfo("level set menu rebuilt: " + infos.Count + " entries");
+                UpdateMenuHeaderProgress(menu);
             }
             catch (Exception e)
             {
                 Log.LogWarning("HealLevelSetButtons failed: " + e.Message);
+            }
+        }
+
+        /// <summary>加载过程中每新增一个关卡集调用：若菜单已打开则以追加方式补按钮（不清空、不闪烁）。</summary>
+        internal static void NotifySetAdded()
+        {
+            try
+            {
+                List<KeyValuePair<string, LevelSetInfoSO>> infos = DIYLevelAssetBundleManager.levelSetInfos;
+                if (infos == null || FiSetMenu == null || MiAddSetButton == null)
+                {
+                    return;
+                }
+                FrontendOptionsMenu menu = FiSetMenu.GetValue(null) as FrontendOptionsMenu;
+                if (menu == null)
+                {
+                    return;
+                }
+                if (_builtCount >= 0 && _builtCount < infos.Count)
+                {
+                    for (int i = _builtCount; i < infos.Count; i++)
+                    {
+                        MiAddSetButton.Invoke(null, new object[] { infos[i].Value });
+                    }
+                }
+                _builtCount = infos.Count;
+                UpdateMenuHeaderProgress(menu);
+            }
+            catch (Exception e)
+            {
+                Log.LogDebug("NotifySetAdded: " + e.Message);
+            }
+        }
+
+        /// <summary>把"更多关卡"菜单标题改成带进度的形式，加载完成后还原。</summary>
+        private static void UpdateMenuHeaderProgress(FrontendOptionsMenu menu)
+        {
+            try
+            {
+                Transform header = ((Component)menu).transform.Find("SettingsBody/HeaderBacker/Header");
+                if (header == null)
+                {
+                    return;
+                }
+                T17Text text = header.GetComponent<T17Text>();
+                if (text == null)
+                {
+                    return;
+                }
+                List<KeyValuePair<string, LevelSetInfoSO>> infos = DIYLevelAssetBundleManager.levelSetInfos;
+                int done = (infos != null) ? infos.Count : 0;
+                if (Loading && TotalSets > 0)
+                {
+                    OC2DIYLevel.UIUtils.SetText(text, "More Levels (loading " + done + "/" + TotalSets + ")", "更多关卡（加载中 " + done + "/" + TotalSets + "）");
+                }
+                else
+                {
+                    OC2DIYLevel.UIUtils.SetText(text, "More Levels", "更多关卡");
+                }
+            }
+            catch (Exception e)
+            {
+                Log.LogDebug("UpdateMenuHeaderProgress: " + e.Message);
+            }
+        }
+
+        /// <summary>加载收尾：关掉角标并把菜单标题还原为"更多关卡"。</summary>
+        internal static void FinishLoading()
+        {
+            Loading = false;
+            try
+            {
+                FrontendOptionsMenu menu = FiSetMenu.GetValue(null) as FrontendOptionsMenu;
+                if (menu != null)
+                {
+                    UpdateMenuHeaderProgress(menu);
+                }
+            }
+            catch (Exception)
+            {
             }
         }
 
@@ -264,6 +380,7 @@ namespace DIYLevelFastInit
 
         private IEnumerator LoadHeavy(string pluginDir)
         {
+            FastInitPlugin.Loading = true;
             FastInitPlugin.Log.LogInfo("LoadHeavy started");
             // WLoader 等插件可能已把 commonW1/commonW2 常驻内存；跳过可以省去
             // 读取整个文件后才发现重复的那 1-2 秒。
@@ -331,6 +448,7 @@ namespace DIYLevelFastInit
                 pending.Add(ps);
                 yield return null;
             }
+            FastInitPlugin.TotalSets = pending.Count;
             FastInitPlugin.Log.LogInfo("prefetch queued: " + pending.Count + " info bundles");
 
             int sets = 0;
@@ -383,10 +501,12 @@ namespace DIYLevelFastInit
                 }
                 infos.Add(new KeyValuePair<string, LevelSetInfoSO>(dir.FullName, so));
                 sets++;
+                FastInitPlugin.NotifySetAdded();
                 FastInitPlugin.Log.LogInfo("level set [" + dir.Name + "] ready (" + sets + " total)");
             }
 
             _finished = true;
+            FastInitPlugin.FinishLoading();
             FastInitPlugin.Log.LogInfo("FastInit complete: " + sets + " level sets available");
 
             // 加载完成后若在前端场景，补一次 AddUI 让菜单立即拿到完整列表；
