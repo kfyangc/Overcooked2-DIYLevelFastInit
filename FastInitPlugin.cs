@@ -23,7 +23,7 @@ namespace DIYLevelFastInit
     [BepInDependency("dev.gua.overcooked.diylevel")]
     public class FastInitPlugin : BaseUnityPlugin
     {
-        public const string PluginGuid = "yang.oc2.diylevel.fastinit";
+        public const string PluginGuid = "oc2.diylevel.fastinit";
         public const string PluginName = "DIYLevel FastInit";
         public const string PluginVersion = "1.3.0";
 
