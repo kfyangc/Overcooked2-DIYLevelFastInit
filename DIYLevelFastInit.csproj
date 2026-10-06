@@ -5,6 +5,9 @@
     <AssemblyName>DIYLevelFastInit</AssemblyName>
     <RootNamespace>DIYLevelFastInit</RootNamespace>
     <LangVersion>7.3</LangVersion>
+    <!-- Keep in sync with PluginVersion in FastInitPlugin.cs -->
+    <Version>1.3.0</Version>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <DebugType>none</DebugType>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
