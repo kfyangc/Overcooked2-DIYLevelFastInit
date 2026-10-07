@@ -128,15 +128,19 @@ namespace DIYLevelFastInit
                 {
                     return;
                 }
-                FrontendOptionsMenu menu = FiSetMenu.GetValue(null) as FrontendOptionsMenu;
-                if (menu == null)
-                {
-                    return; // menu not created yet; AddUI itself will build it from the current list
-                }
-                if (_builtCount == infos.Count)
-                {
-                    return;
-                }
+        FrontendOptionsMenu menu = FiSetMenu.GetValue(null) as FrontendOptionsMenu;
+        if (menu == null)
+        {
+            return; // menu not created yet; AddUI itself will build it from the current list
+        }
+        // The frontend rebuilds its menus on every level exit, so a freshly recreated
+        // menu can match the cached count while missing the reload button; re-assert
+        // it on every heal before the count check can short-circuit.
+        EnsureReloadButton(menu);
+        if (_builtCount == infos.Count)
+        {
+            return;
+        }
                 OC2DIYLevel.UIUtils.ClearAllMenuContent(menu);
                 for (int i = 0; i < infos.Count; i++)
                 {

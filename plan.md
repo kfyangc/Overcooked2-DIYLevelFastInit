@@ -99,11 +99,12 @@ private sealed class SetSnapshot
 
 ## 5. 刷新按钮
 
-`EnsureReloadButton(menu)`:按名查重,`UIUtils.AddButton` 后 `SetAsFirstSibling`,`interactable = !Loading`。调用点三处:
+`EnsureReloadButton(menu)`:按名查重,`UIUtils.AddButton` 后 `SetAsFirstSibling`,`interactable = !Loading`。调用点四处:
 
-1. `HealLevelSetButtons` 全量重建末尾
-2. `NotifySetAdded` 增量追加后(初始加载期间逐集补按钮,把刷新按钮顶回第一位)
-3. `FinishLoading`:恢复置灰状态
+1. `HealLevelSetButtons` **开头**——前端每进出关卡会销毁重建整个菜单,重建后的菜单计数与缓存相等,计数守卫会短路;每次自愈先断言按钮存在(幂等)
+2. `HealLevelSetButtons` 全量重建末尾
+3. `NotifySetAdded` 增量追加后(初始加载期间逐集补按钮,把刷新按钮顶回第一位)
+4. `FinishLoading`:恢复置灰状态
 
 文案 `"Reload level sets" / "刷新关卡列表"`,点击调 `TrySyncReload`。第一位与 `NotifySetAdded` 的尾部追加天然互不干扰。实测后按用户要求移除了热键,按钮是唯一入口。
 
