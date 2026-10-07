@@ -1,6 +1,6 @@
 # DIYLevel FastInit 热重载方案(最终结构)
 
-主前端一键 sync:重扫 `levels/` 目录,按目录粒度 diff,只动发生变化的关卡集。新增目录按排序位置插入,消失的目录卸载移除,info 变化的集 sweep 后原位重载,未变化的集零打扰。两个触发入口:热键(默认 F9,经 BepInEx 配置改键)和 More Levels 菜单第一项的刷新按钮。`common` 与 `common*` 常驻不卸载。零新增 Harmony hook。
+主前端一键 sync:重扫 `levels/` 目录,按目录粒度 diff,只动发生变化的关卡集。新增目录按排序位置插入,消失的目录卸载移除,info 变化的集 sweep 后原位重载,未变化的集零打扰。触发入口是 More Levels 菜单第一项的刷新按钮(实测后按用户要求移除了热键)。`common` 与 `common*` 常驻不卸载。零新增 Harmony hook。
 
 ## 0. 已核实的事实
 
@@ -18,8 +18,7 @@
 | 8 | info bundle 全工程无 `Unload` 调用。文件锁不是普遍事实:实测游戏运行中可删除含 info 文件的整个目录,删除后菜单照常显示(SO 已整读进内存),进关失败(场景包路径 `levelSetInfos.Key` 指向已删目录)。是否持句柄取决于构建压缩方式(LZMA 整包解压进内存后句柄即关;未压缩/LZ4 内存映射则持到 `Unload`)。设计不依赖锁 | 全源码检索 `Unload` 零命中;用户实测 |
 | 9 | 场景包在游戏注册表中的键是小写 `sceneName`(`LoadLevel` 做 `ToLowerInvariant()`);依赖包键为 info 中 `dependencies` 原文 | `game_AssetBundleManager.cs:354`;gua `Patch.cs:1503` |
 | 10 | `UIUtils.AddButton(menu, name, title, titleZH, onClick)` 从 GameOptions 模板实例化 `T17Button` 挂到 Content 末尾,置顶需 `SetAsFirstSibling`;`ClearAllMenuContent` 销毁容器全部子项 | OC2DIYLevel `UIUtils.cs:242-296` |
-| 11 | OC2HostUtilities 的按键模式:`Config.Bind<KeyCode>(section, key, default)` + 每帧 `Input.GetKeyDown(entry.Value)` | HostUtilities 反编译存档 `..\HostUtilities_src\HostUtilities\KeyBindingManager.cs:177-207,341-345` |
-| 12 | arcade 设置菜单只构建一次(`AddCustomArcadeSettingsUI` 对已存在的菜单对象早退),选择器选项是构建时刻快照;增删集后位置偏移,旋钮按活列表解析会静默选错集。**置空静态字段无效**(早退会重新找回现存 GameObject);必须销毁菜单 GameObject,下一次 `T17TabPanel.OnTabSelected` 才会用新选项完整重建,`CreateMenu` 顺带清 `UIUtils.allSelectors` | `CustomArcadeEntryUI.cs:38-55`;`CustomArcade\Patch.cs:349-354`;`UIUtils.cs:71` |
+| 11 | arcade 设置菜单只构建一次(`AddCustomArcadeSettingsUI` 对已存在的菜单对象早退),选择器选项是构建时刻快照;增删集后位置偏移,旋钮按活列表解析会静默选错集。**置空静态字段无效**(早退会重新找回现存 GameObject);必须销毁菜单 GameObject,下一次 `T17TabPanel.OnTabSelected` 才会用新选项完整重建,`CreateMenu` 顺带清 `UIUtils.allSelectors` | `CustomArcadeEntryUI.cs:38-55`;`CustomArcade\Patch.cs:349-354`;`UIUtils.cs:71` |
 
 ## 1. 行为定义
 
@@ -99,9 +98,7 @@ private sealed class SetSnapshot
 
 未变化时提前退出,只记 `sync: no changes`,不动菜单。
 
-## 5. 菜单与触发
-
-### 刷新按钮(第一项)
+## 5. 刷新按钮
 
 `EnsureReloadButton(menu)`:按名查重,`UIUtils.AddButton` 后 `SetAsFirstSibling`,`interactable = !Loading`。调用点三处:
 
@@ -109,27 +106,7 @@ private sealed class SetSnapshot
 2. `NotifySetAdded` 增量追加后(初始加载期间逐集补按钮,把刷新按钮顶回第一位)
 3. `FinishLoading`:恢复置灰状态
 
-文案 `"Reload level sets" / "刷新关卡列表"`,点击调 `TrySyncReload`。第一位与 `NotifySetAdded` 的尾部追加天然互不干扰。
-
-### 热键
-
-按 OC2HostUtilities 模式(事实 11):
-
-```csharp
-// Awake
-ReloadKey = Config.Bind("Hotkeys", "ReloadLevelSets", KeyCode.F9,
-    "Sync DIY level sets from disk (frontend only)");
-
-private void Update()
-{
-    if (Input.GetKeyDown(ReloadKey.Value))
-    {
-        TrySyncReload();
-    }
-}
-```
-
-绑 `None` 即禁用;轮询每帧读 `.Value`,改键即时生效。
+文案 `"Reload level sets" / "刷新关卡列表"`,点击调 `TrySyncReload`。第一位与 `NotifySetAdded` 的尾部追加天然互不干扰。实测后按用户要求移除了热键,按钮是唯一入口。
 
 ## 6. 启动路径改造
 
@@ -137,14 +114,7 @@ private void Update()
 
 ## 7. csproj 与版本
 
-```xml
-<Reference Include="UnityEngine.InputModule">
-  <HintPath>$(GameDir)\Overcooked2_Data\Managed\UnityEngine.InputModule.dll</HintPath>
-  <Private>false</Private>
-</Reference>
-```
-
-Unity 2018 的 Input 模块名是 `InputModule`(2019+ 才改名 InputLegacyModule)。BepInEx 配置系统在现有 `BepInEx.dll` 引用内。`PluginVersion` 与 csproj `<Version>` 同步升 `1.4.0`。
+无新增程序集引用(热键移除后不再需要 Input 模块)。`PluginVersion` 与 csproj `<Version>` 同步升 `1.4.0`。
 
 ## 8. 实现坑位
 
@@ -177,10 +147,8 @@ gua 反射契约维持 AGENTS.md 记录的 7 个成员,不扩大。
 4. 改某集 info(加一关)→ sync → 该集原位更新,日志 `reloaded 1`,其余集未动
 5. 玩过某关后替换其场景文件 → sync → 重玩该关吃到新内容
 6. 只改场景文件不动 info → sync → 日志只 sweep 不重载 info
-7. 对局中按 F9 → 日志拒绝原因,游戏无异常
-8. 刷新按钮为菜单第一项:点击等效 F9,sync 期间置灰
-9. 改配置键位立即生效
-10. sync 前后存档星级逐关一致(不含改名场景)
+7. 刷新按钮为菜单第一项:点击触发 sync,sync 期间置灰
+8. sync 前后存档星级逐关一致(不含改名场景)
 
 ## 11. 分期与风险
 

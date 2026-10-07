@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using BepInEx;
-using BepInEx.Configuration;
 using BepInEx.Logging;
 using HarmonyLib;
 using LevelEditorStub;
@@ -50,8 +49,6 @@ namespace DIYLevelFastInit
 
         internal static FastInitPlugin Instance;
 
-        internal static ConfigEntry<KeyCode> ReloadKey;
-
         // Per-directory info bundle refs and on-load snapshots: sync unloads via these
         // and diffs against them, so untouched sets are never reloaded.
         internal static readonly Dictionary<string, AssetBundle> InfoBundles =
@@ -65,8 +62,6 @@ namespace DIYLevelFastInit
         {
             Log = Logger;
             Instance = this;
-            ReloadKey = Config.Bind("Hotkeys", "ReloadLevelSets", KeyCode.F9,
-                "Sync DIY level sets from disk (frontend only). Bind to None to disable.");
             MethodInfo original = AccessTools.Method(typeof(DIYLevelAssetBundleManager), "Initialize");
             if (original == null)
             {
@@ -84,7 +79,7 @@ namespace DIYLevelFastInit
             {
                 Log.LogWarning("AddUI heal patch not applied (member missing): menu may need re-entry to show late-loaded sets");
             }
-            Log.LogInfo("DIYLevel FastInit ready: level bundles load async, menu no longer blocks, F9 syncs level sets.");
+            Log.LogInfo("DIYLevel FastInit ready: level bundles load async, menu no longer blocks.");
         }
 
         private void OnGUI()
@@ -113,22 +108,6 @@ namespace DIYLevelFastInit
             }
             catch (Exception)
             {
-            }
-        }
-
-        private void Update()
-        {
-            try
-            {
-                KeyCode key = (ReloadKey != null) ? ReloadKey.Value : KeyCode.None;
-                if (key != KeyCode.None && Input.GetKeyDown(key))
-                {
-                    TrySyncReload();
-                }
-            }
-            catch (Exception)
-            {
-                // Input can throw while the game window is unfocused; ignore.
             }
         }
 

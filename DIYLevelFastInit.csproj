@@ -48,10 +48,6 @@
       <HintPath>$(GameDir)\Overcooked2_Data\Managed\UnityEngine.TextRenderingModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
-    <Reference Include="UnityEngine.InputModule">
-      <HintPath>$(GameDir)\Overcooked2_Data\Managed\UnityEngine.InputModule.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
     <Reference Include="UnityEngine.UI">
       <HintPath>$(GameDir)\Overcooked2_Data\Managed\UnityEngine.UI.dll</HintPath>
       <Private>false</Private>
