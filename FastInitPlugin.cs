@@ -667,7 +667,6 @@ namespace DIYLevelFastInit
                 return;
             }
             List<string> sceneNames = new List<string>();
-            List<string> depNames = new List<string>();
             foreach (LevelInfoSO info in so.levelInfos)
             {
                 if (info == null)
@@ -678,15 +677,13 @@ namespace DIYLevelFastInit
                 {
                     sceneNames.Add(info.sceneName);
                 }
-                if (info.dependencies != null)
-                {
-                    depNames.AddRange(info.dependencies);
-                }
             }
-            // Mains first: GetLoadedAssetBundle reports null when a dependency is
-            // missing, so sweeping a dep before its main would hide the main.
+            // Scene (main) bundles only. NEVER sweep names from info.dependencies:
+            // those are VANILLA game bundle names (gua's LoadDependencies expands them
+            // via the game's own manifest), and unloading one the frontend still uses
+            // is a native access violation. Dependency bundles release correctly via
+            // the game's refcounts when the main bundle unloads (UnloadDependencies).
             SweepBundles(sceneNames);
-            SweepBundles(depNames);
         }
 
         // Repeatedly UnloadAssetBundle the names (verbatim and lowercase variants: the

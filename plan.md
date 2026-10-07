@@ -19,6 +19,7 @@
 | 9 | 场景包在游戏注册表中的键是小写 `sceneName`(`LoadLevel` 做 `ToLowerInvariant()`);依赖包键为 info 中 `dependencies` 原文 | `game_AssetBundleManager.cs:354`;gua `Patch.cs:1503` |
 | 10 | `UIUtils.AddButton(menu, name, title, titleZH, onClick)` 从 GameOptions 模板实例化 `T17Button` 挂到 Content 末尾,置顶需 `SetAsFirstSibling`;`ClearAllMenuContent` 销毁容器全部子项 | OC2DIYLevel `UIUtils.cs:242-296` |
 | 11 | arcade 设置菜单只构建一次(`AddCustomArcadeSettingsUI` 对已存在的菜单对象早退),选择器选项是构建时刻快照;增删集后位置偏移,旋钮按活列表解析会静默选错集。**置空静态字段无效**(早退会重新找回现存 GameObject);必须销毁菜单 GameObject,下一次 `T17TabPanel.OnTabSelected` 才会用新选项完整重建,`CreateMenu` 顺带清 `UIUtils.allSelectors` | `CustomArcadeEntryUI.cs:38-55`;`CustomArcade\Patch.cs:349-354`;`UIUtils.cs:71` |
+| 12 | **`dependencies` 里是游戏本体的 bundle 名,严禁按名 sweep**(实测崩溃)。gua 的 `LoadDependencies` 用游戏自身 manifest 展开依赖,名字形如 `bundleNN`;按名 sweep 命中前端正在使用的本体包,游戏卸载走 `Unload(true)` 销毁对象,`UnloadUnusedAssets` 释放 1861 个孤儿后 3 秒原生 Access Violation(2026-10-07 `Crash_2026-10-07_170420`,无托管栈)。正确做法:只 sweep sceneName 主包,依赖由游戏的 `UnloadDependencies` 按 refcount 级联——共享的本体包自然存活 | `game_AssetBundleManager.cs:295-338`;gua `Patch.cs:1498-1525`;实测崩溃报告 |
 
 ## 1. 行为定义
 
@@ -64,12 +65,10 @@ private sealed class SetSnapshot
 
 ### UnloadSet(dirPath, so)
 
-1. 收集该集 bundle 名单:so 的每个 `levelInfos` 的 `sceneName`(原文与小写双变体)与 `dependencies` 原文,加入 `HashSet<string>`
-2. 对名单逐个查 `AssetBundles.AssetBundleManager.GetLoadedAssetBundle(name, out _)`,非 null 则 `UnloadAssetBundle(name)`;整表反复 sweep 直到全为 null 或 16 轮上限(应对 refcount 累积,事实 3)
+1. 收集该集的 **sceneName 名单**(原文与小写双变体)。**绝不收集 `dependencies`**——那些是游戏本体包名,按名 sweep 会卸掉前端正在使用的包,原生崩溃(事实 12)
+2. 对名单逐个查 `AssetBundles.AssetBundleManager.GetLoadedAssetBundle(name, out _)`,非 null 则调 `UnloadAssetBundle(name)`。整表反复 sweep,直到全部为 null 或达 16 轮上限(应对 refcount 累积,事实 3)。主包卸载时游戏的 `UnloadDependencies` 会按 refcount 级联处理依赖包,共享的本体包自动存活
 3. `InfoBundles[dirPath].Unload(false)`(释放内存,顺带清任何残余句柄),移除字典与快照条目
 4. 从 `levelSetInfos` 移除对应项
-
-依赖包物理上位于各集自己的目录(gua 的 `LoadDependencies` 从重定向后的集目录加载)。跨集同名依赖由 refcount 保证安全,被连带卸载的集下次进关自动重载。
 
 ### ReloadSet(dirPath, 旧 so)
 
@@ -119,7 +118,8 @@ private sealed class SetSnapshot
 ## 8. 实现坑位
 
 - 卸载名单匹配用原文与小写双变体(事实 9);sweep 达到轮次上限仍有驻留包时 `LogWarning` 名单
-- 跨集同名 sceneName 时,sweep 一个集会连带卸掉另一个集的同名驻留包;前端无会话,对方下次进关自动重载,只产生日志噪音
+- sweep 只含 sceneName 主包。依赖包不经我们手:游戏在主包归零时按 refcount 级联卸载,凡 refcount 未归零的(含游戏本体共享的)都应存活(事实 12)
+- `dependencies` 里的依赖包若来自被删集目录且 refcount 归零,会被游戏正常卸载;下次该集重装后再进关,由游戏的 `LoadDependencies` 按当前路径重新加载
 - 快照以 `infoFiles[0]` 为准;info 文件改名或增删会表现为 info 变化,触发一次多余重载,无害
 - 硬盘上正在被替换的文件若恰有驻留包锁(未压缩/LZ4 构建,事实 8),替换在资源管理器侧报"正在使用";先按一次 sync(sweep 驻留包)再替换即可
 - net35/C# 7.3:try/catch 内无 `yield`;`UnloadUnusedAssets` 的 `AsyncOperation` 协程直接 `yield return`;`List<T>.Sort` 用 `Comparison<T>` 委托
