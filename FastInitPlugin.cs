@@ -255,18 +255,11 @@ namespace DIYLevelFastInit
                 Log.LogInfo("sync skipped: inside a DIY level");
                 return;
             }
-            try
-            {
-                if (GameUtils.GetGameSession() != null)
-                {
-                    Log.LogInfo("sync skipped: a game session is active");
-                    return;
-                }
-            }
-            catch (Exception e)
-            {
-                Log.LogDebug("sync session check: " + e.Message);
-            }
+            // No GameSession guard here: gua's session is DontDestroyOnLoad and lingers
+            // in the frontend after a level exit, but every level entry runs through
+            // StartEmptySession, which destroys it and rebuilds the scene directory from
+            // the current list — a stale session is harmless to sync. The button itself
+            // only exists in the frontend menu, so no level load can be in flight.
             if (GameObject.Find("/Frontend/FrontendParent/FrontendRootMenu") == null)
             {
                 Log.LogInfo("sync skipped: not in the frontend scene");

@@ -38,8 +38,11 @@ sync(刷新)对每个目录判定四类状态并分别处理:
 守卫条件,任一命中则拒绝并 `LogInfo` 原因:
 
 - 初始加载或上一次 sync 进行中(`Loading == true`)
+- DIY 未初始化(`IsInitialized`)
 - 在 DIY 对局中(`PseudoPrefabManager.isInCustomLevel`)
-- `GameUtils.GetGameSession() != null`
+- 非前端场景(`FrontendRootMenu` 不存在)
+
+**没有 GameSession 守卫**(实测教训):gua 的 GameSession 是 DontDestroyOnLoad,退出关卡回前端后会残留,但每次进关 `StartEmptySession` 都会销毁它并用当前列表重建场景目录,残留会话对 sync 无害;而刷新按钮只存在于前端菜单,加载进行中不可能被点击。
 
 已知代价,写日志提示,不做迁移:改 `sceneName` 该关旧进度孤儿化;`sceneName` 跨集重复串档(OC2DIYLevel 固有行为)。
 
@@ -124,7 +127,6 @@ private sealed class SetSnapshot
 - 快照以 `infoFiles[0]` 为准;info 文件改名或增删会表现为 info 变化,触发一次多余重载,无害
 - 硬盘上正在被替换的文件若恰有驻留包锁(未压缩/LZ4 构建,事实 8),替换在资源管理器侧报"正在使用";先按一次 sync(sweep 驻留包)再替换即可
 - net35/C# 7.3:try/catch 内无 `yield`;`UnloadUnusedAssets` 的 `AsyncOperation` 协程直接 `yield return`;`List<T>.Sort` 用 `Comparison<T>` 委托
-- 保存选择对话框打开的瞬间触发 sync:守卫拦不住(此时尚无 GameSession),与随后的进关存在竞态。`selectedLevel` 只写不清,无法用作守卫;窗口极窄,接受为已知限制
 - 日志关键词沿用 `DIYLevel FastInit`
 
 ## 9. hook 面增量
