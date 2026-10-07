@@ -19,7 +19,7 @@
 | 9 | 场景包在游戏注册表中的键是小写 `sceneName`(`LoadLevel` 做 `ToLowerInvariant()`);依赖包键为 info 中 `dependencies` 原文 | `game_AssetBundleManager.cs:354`;gua `Patch.cs:1503` |
 | 10 | `UIUtils.AddButton(menu, name, title, titleZH, onClick)` 从 GameOptions 模板实例化 `T17Button` 挂到 Content 末尾,置顶需 `SetAsFirstSibling`;`ClearAllMenuContent` 销毁容器全部子项 | OC2DIYLevel `UIUtils.cs:242-296` |
 | 11 | OC2HostUtilities 的按键模式:`Config.Bind<KeyCode>(section, key, default)` + 每帧 `Input.GetKeyDown(entry.Value)` | HostUtilities 反编译存档 `..\HostUtilities_src\HostUtilities\KeyBindingManager.cs:177-207,341-345` |
-| 12 | arcade 设置菜单只构建一次(`AddCustomArcadeSettingsUI` 的 null 早退),选择器选项是构建时刻快照;增删集后位置偏移,旋钮按活列表解析会静默选错集。`customArcadeSettingsMenu`、`selectorOptions` 均为 public static,置空后下一次 `T17TabPanel.OnTabSelected` 自动重建,`CreateMenu` 顺带清 `UIUtils.allSelectors` | `CustomArcadeEntryUI.cs:41-54`;`CustomArcade\Patch.cs:349-354`;`UIUtils.cs:71` |
+| 12 | arcade 设置菜单只构建一次(`AddCustomArcadeSettingsUI` 对已存在的菜单对象早退),选择器选项是构建时刻快照;增删集后位置偏移,旋钮按活列表解析会静默选错集。**置空静态字段无效**(早退会重新找回现存 GameObject);必须销毁菜单 GameObject,下一次 `T17TabPanel.OnTabSelected` 才会用新选项完整重建,`CreateMenu` 顺带清 `UIUtils.allSelectors` | `CustomArcadeEntryUI.cs:38-55`;`CustomArcade\Patch.cs:349-354`;`UIUtils.cs:71` |
 
 ## 1. 行为定义
 
@@ -94,7 +94,7 @@ private sealed class SetSnapshot
 3. 依次应用:先 `UnloadSet` 全部消失项,再 `ReloadSet` 全部 info 变化项,再 sweep 全部内容变化项,最后 `LoadSet` 全部新增项。每项 try/catch,失败只记日志不阻断
 4. `levelSetInfos` 按目录路径做一次稳定排序(幂等,消除任何顺序漂移)
 5. `Resources.UnloadUnusedAssets()`(回收被替换/移除集的旧 SO 与截图)
-6. 有任何变化:`_builtCount = 0` 强制 `HealLevelSetButtons` 重建菜单;置空 `CustomArcadeEntryUI.customArcadeSettingsMenu` 并 `selectorOptions.Clear()`,下次进 arcade 菜单自动重建(事实 12)
+6. 有任何变化:`_builtCount = 0` 强制 `HealLevelSetButtons` 重建菜单;arcade 侧在菜单 GameObject 非 active 时将其销毁(置空静态无效,见事实 12),并清 `selectorOptions`,下次切标签页自动重建;菜单开着则本轮跳过并记日志
 7. `FinishLoading()`,日志摘要 `sync: N added, M removed, K info-reloaded, J content-swept, T unchanged`
 
 未变化时提前退出,只记 `sync: no changes`,不动菜单。
@@ -138,13 +138,13 @@ private void Update()
 ## 7. csproj 与版本
 
 ```xml
-<Reference Include="UnityEngine.InputLegacyModule">
-  <HintPath>$(GameDir)\Overcooked2_Data\Managed\UnityEngine.InputLegacyModule.dll</HintPath>
+<Reference Include="UnityEngine.InputModule">
+  <HintPath>$(GameDir)\Overcooked2_Data\Managed\UnityEngine.InputModule.dll</HintPath>
   <Private>false</Private>
 </Reference>
 ```
 
-BepInEx 配置系统在现有 `BepInEx.dll` 引用内。`PluginVersion` 与 csproj `<Version>` 同步升 `1.4.0`。
+Unity 2018 的 Input 模块名是 `InputModule`(2019+ 才改名 InputLegacyModule)。BepInEx 配置系统在现有 `BepInEx.dll` 引用内。`PluginVersion` 与 csproj `<Version>` 同步升 `1.4.0`。
 
 ## 8. 实现坑位
 
@@ -153,6 +153,7 @@ BepInEx 配置系统在现有 `BepInEx.dll` 引用内。`PluginVersion` 与 cspr
 - 快照以 `infoFiles[0]` 为准;info 文件改名或增删会表现为 info 变化,触发一次多余重载,无害
 - 硬盘上正在被替换的文件若恰有驻留包锁(未压缩/LZ4 构建,事实 8),替换在资源管理器侧报"正在使用";先按一次 sync(sweep 驻留包)再替换即可
 - net35/C# 7.3:try/catch 内无 `yield`;`UnloadUnusedAssets` 的 `AsyncOperation` 协程直接 `yield return`;`List<T>.Sort` 用 `Comparison<T>` 委托
+- 保存选择对话框打开的瞬间触发 sync:守卫拦不住(此时尚无 GameSession),与随后的进关存在竞态。`selectedLevel` 只写不清,无法用作守卫;窗口极窄,接受为已知限制
 - 日志关键词沿用 `DIYLevel FastInit`
 
 ## 9. hook 面增量

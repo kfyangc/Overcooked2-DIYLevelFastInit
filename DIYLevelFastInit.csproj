@@ -6,7 +6,7 @@
     <RootNamespace>DIYLevelFastInit</RootNamespace>
     <LangVersion>7.3</LangVersion>
     <!-- Keep in sync with PluginVersion in FastInitPlugin.cs -->
-    <Version>1.3.0</Version>
+    <Version>1.4.0</Version>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <DebugType>none</DebugType>
@@ -46,6 +46,10 @@
     </Reference>
     <Reference Include="UnityEngine.TextRenderingModule">
       <HintPath>$(GameDir)\Overcooked2_Data\Managed\UnityEngine.TextRenderingModule.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="UnityEngine.InputModule">
+      <HintPath>$(GameDir)\Overcooked2_Data\Managed\UnityEngine.InputModule.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="UnityEngine.UI">
