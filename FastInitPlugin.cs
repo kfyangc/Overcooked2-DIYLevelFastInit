@@ -18,7 +18,7 @@ namespace DIYLevelFastInit
     /// Replaces DIYLevelAssetBundleManager.Initialize(): the cheap part (common bundle,
     /// static fields, DLC data) stays synchronous, while the common* dependency bundles
     /// and all level-set info bundles load in a background coroutine. Also fixes the
-    /// original's missing idempotence guard, and adds hot sync (F9 or the menu button):
+    /// original's missing idempotence guard, and adds hot sync (the menu button):
     /// per-directory diff of levels/ that only reloads changed level sets.
     /// </summary>
     [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
@@ -28,7 +28,7 @@ namespace DIYLevelFastInit
     {
         public const string PluginGuid = "oc2.diylevel.fastinit";
         public const string PluginName = "DIYLevel FastInit";
-        public const string PluginVersion = "1.4.0";
+        public const string PluginVersion = "1.4.1";
 
         internal static ManualLogSource Log;
 
@@ -70,10 +70,13 @@ namespace DIYLevelFastInit
             }
             Harmony harmony = new Harmony(PluginGuid);
             harmony.Patch(original, prefix: new HarmonyMethod(typeof(FastInitPlugin), nameof(InitializePrefix)));
+            // The original builds the level-set button list only when the menu is first
+            // created (if (menu != null) return), so sets that finish loading later never
+            // show up; re-sync the buttons after every AddUI call.
             MethodInfo addUi = AccessTools.Method(typeof(DIYLevelEntryUI), "AddUI");
             if (addUi != null && FiSetMenu != null && MiAddSetButton != null)
             {
-                harmony.Patch(addUi, postfix: new HarmonyMethod(typeof(FastInitPlugin), nameof(AddUIPostfix)));
+                harmony.Patch(addUi, postfix: new HarmonyMethod(typeof(FastInitPlugin), nameof(HealLevelSetButtons)));
             }
             else
             {
@@ -111,25 +114,13 @@ namespace DIYLevelFastInit
             }
         }
 
-        // The original builds the level-set button list only when the menu is first created
-        // (if (menu != null) return), so sets that finish loading later never show up;
-        // re-sync the buttons after every AddUI call.
-        private static void AddUIPostfix()
-        {
-            HealLevelSetButtons();
-        }
-
         internal static void HealLevelSetButtons()
         {
             try
             {
                 List<KeyValuePair<string, LevelSetInfoSO>> infos = DIYLevelAssetBundleManager.levelSetInfos;
-                if (infos == null || FiSetMenu == null || MiAddSetButton == null)
-                {
-                    return;
-                }
-                FrontendOptionsMenu menu = FiSetMenu.GetValue(null) as FrontendOptionsMenu;
-                if (menu == null)
+                FrontendOptionsMenu menu = TryGetMenu();
+                if (infos == null || menu == null || MiAddSetButton == null)
                 {
                     return; // menu not created yet; AddUI itself will build it from the current list
                 }
@@ -157,21 +148,19 @@ namespace DIYLevelFastInit
             }
         }
 
+        // Incremental counterpart of HealLevelSetButtons: appends only the buttons past
+        // the cached count, so the menu fills in live during the initial async load.
         internal static void NotifySetAdded()
         {
             try
             {
                 List<KeyValuePair<string, LevelSetInfoSO>> infos = DIYLevelAssetBundleManager.levelSetInfos;
-                if (infos == null || FiSetMenu == null || MiAddSetButton == null)
+                FrontendOptionsMenu menu = TryGetMenu();
+                if (infos == null || menu == null || MiAddSetButton == null)
                 {
                     return;
                 }
-                FrontendOptionsMenu menu = FiSetMenu.GetValue(null) as FrontendOptionsMenu;
-                if (menu == null)
-                {
-                    return;
-                }
-                if (_builtCount >= 0 && _builtCount < infos.Count)
+                if (_builtCount < infos.Count)
                 {
                     for (int i = _builtCount; i < infos.Count; i++)
                     {
@@ -188,11 +177,16 @@ namespace DIYLevelFastInit
             }
         }
 
+        private static FrontendOptionsMenu TryGetMenu()
+        {
+            return FiSetMenu != null ? FiSetMenu.GetValue(null) as FrontendOptionsMenu : null;
+        }
+
         private static void UpdateMenuHeaderProgress(FrontendOptionsMenu menu)
         {
             try
             {
-                Transform header = ((Component)menu).transform.Find("SettingsBody/HeaderBacker/Header");
+                Transform header = menu.transform.Find("SettingsBody/HeaderBacker/Header");
                 if (header == null)
                 {
                     return;
@@ -222,17 +216,11 @@ namespace DIYLevelFastInit
         internal static void FinishLoading()
         {
             Loading = false;
-            try
+            FrontendOptionsMenu menu = TryGetMenu();
+            if (menu != null)
             {
-                FrontendOptionsMenu menu = FiSetMenu.GetValue(null) as FrontendOptionsMenu;
-                if (menu != null)
-                {
-                    UpdateMenuHeaderProgress(menu);
-                    EnsureReloadButton(menu);
-                }
-            }
-            catch (Exception)
-            {
+                UpdateMenuHeaderProgress(menu);
+                EnsureReloadButton(menu);
             }
         }
 
@@ -274,8 +262,7 @@ namespace DIYLevelFastInit
             try
             {
                 Log.LogInfo("sync started");
-                string levelsDir = Path.Combine(GetDiyPluginDir(), "levels");
-                List<DirectoryInfo> dirs = FastInitHost.SafeGetDirs(levelsDir);
+                List<DirectoryInfo> dirs = FastInitHost.SafeGetDirs(Path.Combine(GetDiyPluginDir(), "levels"));
                 TotalSets = dirs.Count;
                 if (dirs.Count == 0 && DIYLevelAssetBundleManager.levelSetInfos != null
                     && DIYLevelAssetBundleManager.levelSetInfos.Count > 0)
@@ -290,6 +277,7 @@ namespace DIYLevelFastInit
                 List<string> removed = new List<string>();
                 int unchanged = 0;
                 bool diffFailed = false;
+                // Diff only — no yields allowed inside this try (C# iterators).
                 try
                 {
                     Dictionary<string, SetSnapshot> fresh = new Dictionary<string, SetSnapshot>(StringComparer.OrdinalIgnoreCase);
@@ -312,8 +300,7 @@ namespace DIYLevelFastInit
                         }
                         else if (!hasSnapshot)
                         {
-                            // Loaded before snapshots existed; leave it alone.
-                            unchanged++;
+                            unchanged++; // loaded before snapshots existed; leave it alone
                         }
                         else if (old.InfoFileName != snap.InfoFileName
                             || old.InfoMtimeUtc != snap.InfoMtimeUtc
@@ -365,12 +352,8 @@ namespace DIYLevelFastInit
                 }
                 foreach (DirectoryInfo dir in infoChanged)
                 {
-                    Box done = new Box();
-                    IEnumerator step = ReloadSetRoutine(dir, done);
-                    while (step.MoveNext())
-                    {
-                        yield return step.Current;
-                    }
+                    Box<bool> done = new Box<bool>();
+                    yield return ReloadSetRoutine(dir, done);
                     if (done.Value)
                     {
                         reloaded++;
@@ -400,12 +383,8 @@ namespace DIYLevelFastInit
                 }
                 foreach (DirectoryInfo dir in added)
                 {
-                    Box done = new Box();
-                    IEnumerator step = LoadSetRoutine(dir, done);
-                    while (step.MoveNext())
-                    {
-                        yield return step.Current;
-                    }
+                    Box<bool> done = new Box<bool>();
+                    yield return LoadSetRoutine(dir, done);
                     if (done.Value)
                     {
                         addedCount++;
@@ -417,10 +396,7 @@ namespace DIYLevelFastInit
                 }
                 try
                 {
-                    DIYLevelAssetBundleManager.levelSetInfos.Sort(delegate (KeyValuePair<string, LevelSetInfoSO> a, KeyValuePair<string, LevelSetInfoSO> b)
-                    {
-                        return string.Compare(a.Key, b.Key, StringComparison.OrdinalIgnoreCase);
-                    });
+                    DIYLevelAssetBundleManager.levelSetInfos.Sort((a, b) => string.Compare(a.Key, b.Key, StringComparison.OrdinalIgnoreCase));
                 }
                 catch (Exception e)
                 {
@@ -433,32 +409,7 @@ namespace DIYLevelFastInit
                 {
                     _builtCount = 0;
                     HealLevelSetButtons();
-                    try
-                    {
-                        FrontendOptionsMenu arcadeMenu = CustomArcadeEntryUI.customArcadeSettingsMenu;
-                        if (arcadeMenu != null)
-                        {
-                            // Nulling the static is not enough: AddCustomArcadeSettingsUI
-                            // early-returns while the menu GameObject exists, so the stale
-                            // selector rows would survive. Destroy the object; the next
-                            // T17TabPanel.OnTabSelected rebuilds it with fresh options.
-                            if (arcadeMenu.gameObject.activeInHierarchy)
-                            {
-                                Log.LogInfo("sync: arcade settings menu is open, deferring its rebuild");
-                            }
-                            else
-                            {
-                                UnityEngine.Object.Destroy(arcadeMenu.gameObject);
-                                CustomArcadeEntryUI.customArcadeSettingsMenu = null;
-                                CustomArcadeEntryUI.selectorOptions.Clear();
-                                Log.LogInfo("arcade settings menu will rebuild on next open");
-                            }
-                        }
-                    }
-                    catch (Exception e)
-                    {
-                        Log.LogDebug("arcade menu reset failed: " + e.Message);
-                    }
+                    ResetArcadeMenu();
                 }
                 Log.LogInfo("sync: " + addedCount + " added, " + removedCount + " removed, "
                     + reloaded + " info-reloaded, " + swept + " content-swept, "
@@ -472,10 +423,36 @@ namespace DIYLevelFastInit
 
         private static int IndexOfSet(List<KeyValuePair<string, LevelSetInfoSO>> infos, string key)
         {
-            return infos.FindIndex(delegate (KeyValuePair<string, LevelSetInfoSO> kv)
+            return infos.FindIndex(kv => string.Equals(kv.Key, key, StringComparison.OrdinalIgnoreCase));
+        }
+
+        // The arcade settings menu snapshots selector options at build time; destroy it so
+        // the next T17TabPanel.OnTabSelected rebuilds it with fresh options. Nulling the
+        // static is not enough: AddCustomArcadeSettingsUI early-returns while the menu
+        // GameObject exists, so stale selector rows would survive.
+        private static void ResetArcadeMenu()
+        {
+            try
             {
-                return string.Equals(kv.Key, key, StringComparison.OrdinalIgnoreCase);
-            });
+                FrontendOptionsMenu arcadeMenu = CustomArcadeEntryUI.customArcadeSettingsMenu;
+                if (arcadeMenu == null)
+                {
+                    return;
+                }
+                if (arcadeMenu.gameObject.activeInHierarchy)
+                {
+                    Log.LogInfo("sync: arcade settings menu is open, deferring its rebuild");
+                    return;
+                }
+                UnityEngine.Object.Destroy(arcadeMenu.gameObject);
+                CustomArcadeEntryUI.customArcadeSettingsMenu = null;
+                CustomArcadeEntryUI.selectorOptions.Clear();
+                Log.LogInfo("arcade settings menu will rebuild on next open");
+            }
+            catch (Exception e)
+            {
+                Log.LogDebug("arcade menu reset failed: " + e.Message);
+            }
         }
 
         // Remove one set: sweep its resident scene/dependency bundles, release the info
@@ -506,9 +483,39 @@ namespace DIYLevelFastInit
             infos.RemoveAt(idx);
         }
 
+        // Load one directory's info bundle + LevelSetInfo asset (shared by add and reload).
+        // Fills result; unloads the bundle itself if the asset is missing. Callers check
+        // result.So to detect failure.
+        private static IEnumerator LoadInfoSet(DirectoryInfo dir, InfoLoad result)
+        {
+            List<FileInfo> infoFiles = FastInitHost.SafeGetFiles(dir, "info*");
+            if (infoFiles.Count == 0)
+            {
+                Log.LogWarning("sync: missing info file: " + dir.Name);
+                yield break;
+            }
+            result.InfoFile = infoFiles[0];
+            Box<AssetBundle> bundleBox = new Box<AssetBundle>();
+            yield return FastInitHost.LoadBundleFile(result.InfoFile.FullName, dir.Name, bundleBox);
+            result.Bundle = bundleBox.Value;
+            if (result.Bundle == null)
+            {
+                Log.LogWarning("sync: failed loading info bundle of [" + dir.Name + "]");
+                yield break;
+            }
+            Box<LevelSetInfoSO> soBox = new Box<LevelSetInfoSO>();
+            yield return FastInitHost.LoadInfoAsset(result.Bundle, dir.Name + " (LevelSetInfo)", soBox);
+            result.So = soBox.Value;
+            if (result.So == null)
+            {
+                Log.LogWarning("sync: missing LevelSetInfo in [" + dir.Name + "]");
+                result.Bundle.Unload(false);
+            }
+        }
+
         // Reload one set whose info changed: sweep with the OLD scene names, unload the
         // old info bundle, load the new one, replace the entry at the same index.
-        private IEnumerator ReloadSetRoutine(DirectoryInfo dir, Box done)
+        private static IEnumerator ReloadSetRoutine(DirectoryInfo dir, Box<bool> done)
         {
             string key = dir.FullName;
             List<KeyValuePair<string, LevelSetInfoSO>> infos = DIYLevelAssetBundleManager.levelSetInfos;
@@ -532,103 +539,30 @@ namespace DIYLevelFastInit
             {
                 Log.LogWarning("sync: sweep of [" + dir.Name + "] failed: " + e.Message);
             }
-            List<FileInfo> infoFiles = FastInitHost.SafeGetFiles(dir, "info*");
-            if (infoFiles.Count == 0)
+            InfoLoad load = new InfoLoad();
+            yield return LoadInfoSet(dir, load);
+            if (load.So == null)
             {
                 // Unload(false) kept the old SO alive, so the stale set still renders.
-                Log.LogWarning("sync: info file vanished from [" + dir.Name + "], keeping old set");
+                Log.LogWarning("sync: [" + dir.Name + "] reload failed, keeping old set");
                 done.Value = false;
                 yield break;
             }
-            FileInfo infoFile = infoFiles[0];
-            AssetBundleCreateRequest req = AssetBundle.LoadFromFileAsync(infoFile.FullName);
-            IEnumerator wait = FastInitHost.WaitOp(req, infoFile.Name);
-            while (wait.MoveNext())
-            {
-                yield return wait.Current;
-            }
-            AssetBundle bundle = req.assetBundle;
-            if (bundle == null)
-            {
-                Log.LogWarning("sync [" + dir.Name + "]: async load failed, trying sync");
-                bundle = AssetBundle.LoadFromFile(infoFile.FullName);
-            }
-            if (bundle == null)
-            {
-                Log.LogWarning("sync: failed loading info bundle of [" + dir.Name + "], keeping old set");
-                done.Value = false;
-                yield break;
-            }
-            AssetBundleRequest ar = bundle.LoadAssetAsync("LevelSetInfo", typeof(LevelSetInfoSO));
-            IEnumerator waitAr = FastInitHost.WaitOp(ar, dir.Name + " (LevelSetInfo)");
-            while (waitAr.MoveNext())
-            {
-                yield return waitAr.Current;
-            }
-            LevelSetInfoSO so = ar.asset as LevelSetInfoSO;
-            if (so == null)
-            {
-                so = bundle.LoadAsset("LevelSetInfo", typeof(LevelSetInfoSO)) as LevelSetInfoSO;
-            }
-            if (so == null)
-            {
-                Log.LogWarning("sync: missing LevelSetInfo in [" + dir.Name + "], keeping old set");
-                bundle.Unload(false);
-                done.Value = false;
-                yield break;
-            }
-            infos[idx] = new KeyValuePair<string, LevelSetInfoSO>(key, so);
-            InfoBundles[key] = bundle;
-            Snapshots[key] = ReadSnapshot(dir, infoFile);
+            infos[idx] = new KeyValuePair<string, LevelSetInfoSO>(key, load.So);
+            InfoBundles[key] = load.Bundle;
+            Snapshots[key] = ReadSnapshot(dir, load.InfoFile);
             Log.LogInfo("sync: level set [" + dir.Name + "] reloaded in place");
             done.Value = true;
         }
 
         // Load one new directory and insert it at its sorted position (directory order
         // must hold: the arcade mod resolves selections by list position).
-        private IEnumerator LoadSetRoutine(DirectoryInfo dir, Box done)
+        private static IEnumerator LoadSetRoutine(DirectoryInfo dir, Box<bool> done)
         {
-            List<FileInfo> infoFiles = FastInitHost.SafeGetFiles(dir, "info*");
-            if (infoFiles.Count == 0)
+            InfoLoad load = new InfoLoad();
+            yield return LoadInfoSet(dir, load);
+            if (load.So == null)
             {
-                Log.LogWarning("sync: missing info file: " + dir.Name);
-                done.Value = false;
-                yield break;
-            }
-            FileInfo infoFile = infoFiles[0];
-            AssetBundleCreateRequest req = AssetBundle.LoadFromFileAsync(infoFile.FullName);
-            IEnumerator wait = FastInitHost.WaitOp(req, infoFile.Name);
-            while (wait.MoveNext())
-            {
-                yield return wait.Current;
-            }
-            AssetBundle bundle = req.assetBundle;
-            if (bundle == null)
-            {
-                Log.LogWarning("sync [" + dir.Name + "]: async load failed, trying sync");
-                bundle = AssetBundle.LoadFromFile(infoFile.FullName);
-            }
-            if (bundle == null)
-            {
-                Log.LogWarning("sync: failed loading info bundle of " + dir.Name);
-                done.Value = false;
-                yield break;
-            }
-            AssetBundleRequest ar = bundle.LoadAssetAsync("LevelSetInfo", typeof(LevelSetInfoSO));
-            IEnumerator waitAr = FastInitHost.WaitOp(ar, dir.Name + " (LevelSetInfo)");
-            while (waitAr.MoveNext())
-            {
-                yield return waitAr.Current;
-            }
-            LevelSetInfoSO so = ar.asset as LevelSetInfoSO;
-            if (so == null)
-            {
-                so = bundle.LoadAsset("LevelSetInfo", typeof(LevelSetInfoSO)) as LevelSetInfoSO;
-            }
-            if (so == null)
-            {
-                Log.LogWarning("sync: missing LevelSetInfo in " + dir.Name);
-                bundle.Unload(false);
                 done.Value = false;
                 yield break;
             }
@@ -637,7 +571,7 @@ namespace DIYLevelFastInit
             if (IndexOfSet(infos, key) >= 0)
             {
                 Log.LogWarning("sync: [" + dir.Name + "] already loaded, skipping insert");
-                bundle.Unload(false);
+                load.Bundle.Unload(false);
                 done.Value = false;
                 yield break;
             }
@@ -650,9 +584,9 @@ namespace DIYLevelFastInit
                     break;
                 }
             }
-            infos.Insert(insertAt, new KeyValuePair<string, LevelSetInfoSO>(key, so));
-            InfoBundles[key] = bundle;
-            Snapshots[key] = ReadSnapshot(dir, infoFile);
+            infos.Insert(insertAt, new KeyValuePair<string, LevelSetInfoSO>(key, load.So));
+            InfoBundles[key] = load.Bundle;
+            Snapshots[key] = ReadSnapshot(dir, load.InfoFile);
             Log.LogInfo("sync: level set [" + dir.Name + "] added");
             done.Value = true;
         }
@@ -760,7 +694,7 @@ namespace DIYLevelFastInit
                 {
                     return;
                 }
-                btn.gameObject.transform.SetAsFirstSibling();
+                btn.transform.SetAsFirstSibling();
                 ((Button)btn).interactable = !Loading;
             }
             catch (Exception e)
@@ -837,13 +771,14 @@ namespace DIYLevelFastInit
         private static bool RunCheapInit(string pluginDir)
         {
             DIYLevelAssetBundleManager prevInst = FiInstance.GetValue(null) as DIYLevelAssetBundleManager;
-            GameObject go = new GameObject("DIYLevelAssetBundleManager", new Type[] { typeof(DIYLevelAssetBundleManager) });
+            GameObject go = new GameObject("DIYLevelAssetBundleManager");
             UnityEngine.Object.DontDestroyOnLoad(go);
-            if (prevInst != null && ((Component)prevInst).gameObject != go)
+            DIYLevelAssetBundleManager inst = go.AddComponent<DIYLevelAssetBundleManager>();
+            if (prevInst != null && prevInst.gameObject != go)
             {
-                UnityEngine.Object.Destroy(((Component)prevInst).gameObject);
+                UnityEngine.Object.Destroy(prevInst.gameObject);
             }
-            FiInstance.SetValue(null, go.GetComponent<DIYLevelAssetBundleManager>());
+            FiInstance.SetValue(null, inst);
 
             string commonPath = Path.Combine(pluginDir, "common");
             if (!File.Exists(commonPath))
@@ -862,7 +797,7 @@ namespace DIYLevelFastInit
             if (DIYLevelAssetBundleManager.diyDLCFrontendData == null)
             {
                 DLCFrontendData data = ScriptableObject.CreateInstance<DLCFrontendData>();
-                ((UnityEngine.Object)data).name = "DLC_DIYLevel";
+                data.name = "DLC_DIYLevel";
                 data.m_NameLocalizationKey = "\"More Levels\"";
                 data.m_DescriptionLocalizationKey = OC2DIYLevel.UIUtils.GetLocalizedText("\"Enjoy extra levels from the community!\"", "\"游玩来自玩家社区的更多关卡！\"");
                 data.m_PreviewImage = DIYLevelAssetBundleManager.GetCover();
@@ -876,10 +811,18 @@ namespace DIYLevelFastInit
         }
     }
 
-    // One-shot success flag passed into nested load coroutines.
-    internal sealed class Box
+    // One-slot result passed into nested coroutines (iterators cannot have out/ref params).
+    internal sealed class Box<T>
     {
-        public bool Value;
+        public T Value;
+    }
+
+    // Result slots filled by the shared info-set loader.
+    internal sealed class InfoLoad
+    {
+        public AssetBundle Bundle;
+        public LevelSetInfoSO So;
+        public FileInfo InfoFile;
     }
 
     // Per-set disk fingerprint taken at load time; sync diffs against it.
@@ -947,9 +890,8 @@ namespace DIYLevelFastInit
             }
         }
 
-        // Polls an async operation; the outer coroutine forwards wait.Current as its own
-        // yield. Gives up after the timeout — the caller then checks isDone and falls
-        // back to the sync path.
+        // Polls an async operation; yield this from a coroutine to await it. Gives up
+        // after the timeout — callers then fall back to the sync path.
         internal static IEnumerator WaitOp(AsyncOperation op, string what)
         {
             float start = Time.realtimeSinceStartup;
@@ -962,6 +904,40 @@ namespace DIYLevelFastInit
                 }
                 yield return null;
             }
+        }
+
+        // Await an existing create request, falling back to a sync load on async failure
+        // or timeout; result.Value is null on total failure.
+        internal static IEnumerator FinishBundleLoad(AssetBundleCreateRequest req, string path, string what, Box<AssetBundle> result)
+        {
+            yield return WaitOp(req, what);
+            AssetBundle bundle = req.assetBundle;
+            if (bundle == null)
+            {
+                FastInitPlugin.Log.LogWarning(what + ": async failed (" + (req.isDone ? "null bundle" : "timeout") + "), trying sync");
+                bundle = AssetBundle.LoadFromFile(path);
+            }
+            result.Value = bundle;
+        }
+
+        // Start an async file load and await it (see FinishBundleLoad).
+        internal static IEnumerator LoadBundleFile(string path, string what, Box<AssetBundle> result)
+        {
+            return FinishBundleLoad(AssetBundle.LoadFromFileAsync(path), path, what, result);
+        }
+
+        // Async LevelSetInfo load with a sync LoadAsset fallback; null on failure.
+        internal static IEnumerator LoadInfoAsset(AssetBundle bundle, string what, Box<LevelSetInfoSO> result)
+        {
+            AssetBundleRequest ar = bundle.LoadAssetAsync("LevelSetInfo", typeof(LevelSetInfoSO));
+            yield return WaitOp(ar, what);
+            LevelSetInfoSO so = ar.isDone ? ar.asset as LevelSetInfoSO : null;
+            if (so == null)
+            {
+                FastInitPlugin.Log.LogWarning(what + ": LoadAssetAsync incomplete, trying sync LoadAsset");
+                so = bundle.LoadAsset("LevelSetInfo", typeof(LevelSetInfoSO)) as LevelSetInfoSO;
+            }
+            result.Value = so;
         }
 
         private IEnumerator LoadHeavy(string pluginDir)
@@ -990,29 +966,16 @@ namespace DIYLevelFastInit
                     FastInitPlugin.Log.LogInfo("skip " + file.Name + ": already loaded by another plugin");
                     continue;
                 }
-                AssetBundleCreateRequest req = AssetBundle.LoadFromFileAsync(file.FullName);
-                IEnumerator wait = WaitOp(req, file.Name);
-                while (wait.MoveNext())
-                {
-                    yield return wait.Current;
-                }
-                if (req.isDone && req.assetBundle != null)
+                Box<AssetBundle> done = new Box<AssetBundle>();
+                yield return LoadBundleFile(file.FullName, file.Name, done);
+                if (done.Value != null)
                 {
                     loaded++;
                     alreadyLoaded.Add(file.Name);
                 }
                 else
                 {
-                    FastInitPlugin.Log.LogWarning(file.Name + ": async failed (" + (req.isDone ? "null bundle" : "timeout") + "), trying sync");
-                    AssetBundle sync = AssetBundle.LoadFromFile(file.FullName);
-                    if (sync != null)
-                    {
-                        loaded++;
-                    }
-                    else
-                    {
-                        failed++;
-                    }
+                    failed++;
                 }
             }
             FastInitPlugin.Log.LogInfo("common bundles: " + loaded + " loaded, " + skipped + " skipped (dup), " + failed + " failed");
@@ -1029,11 +992,12 @@ namespace DIYLevelFastInit
                     FastInitPlugin.Log.LogWarning("missing info file: " + dir.Name);
                     continue;
                 }
-                PendingSet ps = new PendingSet();
-                ps.Dir = dir;
-                ps.File = infoFiles[0];
-                ps.Req = AssetBundle.LoadFromFileAsync(infoFiles[0].FullName);
-                pending.Add(ps);
+                pending.Add(new PendingSet
+                {
+                    Dir = dir,
+                    File = infoFiles[0],
+                    Req = AssetBundle.LoadFromFileAsync(infoFiles[0].FullName)
+                });
                 yield return null;
             }
             FastInitPlugin.TotalSets = pending.Count;
@@ -1043,56 +1007,28 @@ namespace DIYLevelFastInit
             List<KeyValuePair<string, LevelSetInfoSO>> infos = DIYLevelAssetBundleManager.levelSetInfos;
             foreach (PendingSet p in pending)
             {
-                DirectoryInfo dir = p.Dir;
-                AssetBundleCreateRequest cr = p.Req;
-                FastInitPlugin.Log.LogInfo("consuming level set [" + dir.Name + "]");
-                IEnumerator waitCr = WaitOp(cr, dir.Name);
-                while (waitCr.MoveNext())
+                FastInitPlugin.Log.LogInfo("consuming level set [" + p.Dir.Name + "]");
+                Box<AssetBundle> bundleBox = new Box<AssetBundle>();
+                yield return FinishBundleLoad(p.Req, p.File.FullName, p.Dir.Name, bundleBox);
+                if (bundleBox.Value == null)
                 {
-                    yield return waitCr.Current;
-                }
-                AssetBundle bundle;
-                if (cr.isDone && cr.assetBundle != null)
-                {
-                    bundle = cr.assetBundle;
-                }
-                else
-                {
-                    FastInitPlugin.Log.LogWarning(dir.Name + ": async failed (" + (cr.isDone ? "null bundle" : "timeout") + "), trying sync");
-                    bundle = AssetBundle.LoadFromFile(p.File.FullName);
-                }
-                if (bundle == null)
-                {
-                    FastInitPlugin.Log.LogWarning("failed loading info bundle of " + dir.Name);
+                    FastInitPlugin.Log.LogWarning("failed loading info bundle of " + p.Dir.Name);
                     continue;
                 }
-                LevelSetInfoSO so = null;
-                AssetBundleRequest ar = bundle.LoadAssetAsync("LevelSetInfo", typeof(LevelSetInfoSO));
-                IEnumerator waitAr = WaitOp(ar, dir.Name + " (LoadAssetAsync)");
-                while (waitAr.MoveNext())
+                Box<LevelSetInfoSO> soBox = new Box<LevelSetInfoSO>();
+                yield return LoadInfoAsset(bundleBox.Value, p.Dir.Name + " (LevelSetInfo)", soBox);
+                if (soBox.Value == null)
                 {
-                    yield return waitAr.Current;
-                }
-                if (ar.isDone)
-                {
-                    so = ar.asset as LevelSetInfoSO;
-                }
-                if (so == null)
-                {
-                    FastInitPlugin.Log.LogWarning(dir.Name + ": LoadAssetAsync incomplete, trying sync LoadAsset");
-                    so = bundle.LoadAsset("LevelSetInfo", typeof(LevelSetInfoSO)) as LevelSetInfoSO;
-                }
-                if (so == null)
-                {
-                    FastInitPlugin.Log.LogWarning("missing LevelSetInfo in " + dir.Name);
+                    FastInitPlugin.Log.LogWarning("missing LevelSetInfo in " + p.Dir.Name);
+                    bundleBox.Value.Unload(false);
                     continue;
                 }
-                infos.Add(new KeyValuePair<string, LevelSetInfoSO>(dir.FullName, so));
-                FastInitPlugin.InfoBundles[dir.FullName] = bundle;
-                FastInitPlugin.Snapshots[dir.FullName] = FastInitPlugin.ReadSnapshot(dir, p.File);
+                infos.Add(new KeyValuePair<string, LevelSetInfoSO>(p.Dir.FullName, soBox.Value));
+                FastInitPlugin.InfoBundles[p.Dir.FullName] = bundleBox.Value;
+                FastInitPlugin.Snapshots[p.Dir.FullName] = FastInitPlugin.ReadSnapshot(p.Dir, p.File);
                 sets++;
                 FastInitPlugin.NotifySetAdded();
-                FastInitPlugin.Log.LogInfo("level set [" + dir.Name + "] ready (" + sets + " total)");
+                FastInitPlugin.Log.LogInfo("level set [" + p.Dir.Name + "] ready (" + sets + " total)");
             }
 
             _finished = true;
