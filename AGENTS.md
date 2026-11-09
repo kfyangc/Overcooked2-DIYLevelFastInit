@@ -397,8 +397,15 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 ## Publishing rule
 
 Commit each version independently after implementation and relevant checks, before
-starting the next version. Include the version number in the commit message and keep
-`PluginVersion` and the csproj version synchronized, preserving development history.
+starting the next version. Do not include version numbers in commit subjects or bodies;
+describe the concrete change instead. Keep `PluginVersion` and the csproj version
+synchronized, and put version identifiers in plugin metadata, tags and release titles.
+When rewording local history, leave commits already in `origin/master` unchanged.
+
+For approved GitHub release creation and asset uploads, use the token from this
+repository's local `.env` file. Load it into the publishing process environment without
+printing it, putting it in command arguments or committing `.env`. Do not substitute
+cached credentials from another account.
 
 Creating the GitHub repo, pushing, or cutting releases requires the owner's explicit
 review and approval first — never push on your own initiative.
