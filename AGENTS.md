@@ -2,7 +2,7 @@
 
 BepInEx 5 plugin (net35) that patches
 [OC2DIYLevel](https://github.com/gua248/Overcooked2-LevelEditor) 0.10.0 and 0.11.0 for Overcooked! 2.
-Test version 1.7.0.6 keeps a complete lightweight level catalog while loading info resources
+Test version 1.7.0.7 keeps a complete lightweight level catalog while loading info resources
 and building configurations only for the selected level. Async discovery, menu healing,
 the progress indicator, and incremental hot reload remain supported.
 
@@ -83,6 +83,13 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   scalar metadata into independent lightweight SOs, clears temporary full-info references,
   closes the source with `Unload(false)`, and waits for safe unused-asset collection. Discovery pauses during DIY gameplay and transitions. Do not restore
   unbounded parallel prefetch or full-info retention.
+- Warm discovery checks an approximately 4 ms work budget between sets instead of
+  yielding after every cache hit. A single set can exceed the budget. Preserve directory
+  order and transition pauses. Recheck resident common bundles before each request,
+  since other loaders can complete bundles while an earlier request is pending.
+  `startup timing` separates preparation/common/catalog phases and catalog subphases;
+  wall-time fields include native/frame waits and must not be double-counted. Cache
+  miss reasons and thumbnail warmup timings distinguish source scans from cache reads.
 - `SetMetadata`, `LevelMetadata`, and `PlayerMetadata` contain only strings, numbers,
   and arrays. `LevelCatalogCache` writes versioned binary `.catalog` files under
   `Paths.CachePath/DIYLevelFastInit/`, named by a SHA-256 hash of the normalized directory

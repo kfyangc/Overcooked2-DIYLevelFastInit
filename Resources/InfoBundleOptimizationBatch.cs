@@ -45,6 +45,7 @@ namespace DIYLevelFastInit
 
         private void Work()
         {
+            System.Diagnostics.Stopwatch timer = System.Diagnostics.Stopwatch.StartNew();
             int replaced = 0, ready = 0, skipped = 0, failed = 0, restored = 0;
             try
             {
@@ -52,9 +53,12 @@ namespace DIYLevelFastInit
                 {
                     if (_cancelled) break;
                     _current = Path.GetFileName(path);
+                    double started = timer.Elapsed.TotalMilliseconds;
                     InfoBundleOptimizer.Result result = _restore
                         ? InfoBundleOptimizer.Restore(path, () => _cancelled, Log)
                         : InfoBundleOptimizer.Optimize(path, () => _cancelled, Log);
+                    Log("info bundle preparation timing [" + Path.GetFileName(path) + "]: "
+                        + StartupTimings.Ms(timer.Elapsed.TotalMilliseconds - started) + " ms, result=" + result);
                     switch (result)
                     {
                         case InfoBundleOptimizer.Result.Replaced: replaced++; break;
@@ -72,7 +76,8 @@ namespace DIYLevelFastInit
             {
                 Log("info bundle startup " + (_restore ? "restore" : "optimization") + (_cancelled ? " cancelled" : " complete")
                     + ": " + replaced + " replaced, " + ready + " already independent, " + restored + " restored, "
-                    + skipped + " skipped, " + failed + " failed (" + _completed + "/" + _paths.Length + ")");
+                    + skipped + " skipped, " + failed + " failed (" + _completed + "/" + _paths.Length + ", "
+                    + StartupTimings.Ms(timer.Elapsed.TotalMilliseconds) + " ms)");
                 _current = null;
                 _done = true;
             }

@@ -38,20 +38,29 @@ namespace DIYLevelFastInit
                 yield break;
             }
             result.InfoFile = files[0];
-            result.So = LevelCatalogCache.TryRead(dir, result.InfoFile);
+            result.So = LevelCatalogCache.TryRead(dir, result.InfoFile, result);
             if (result.So != null) yield break;
+            Log.LogInfo("catalog cache miss [" + dir.Name + "]: " + result.CacheMiss);
 
             Box<AssetBundle> bundle = new Box<AssetBundle>();
             Box<LevelSetInfoSO> full = new Box<LevelSetInfoSO>();
+            System.Diagnostics.Stopwatch timer = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 yield return OnDemandResources.LoadCatalogBundle(result.InfoFile.FullName, bundle);
+                result.BundleMs = timer.Elapsed.TotalMilliseconds;
                 if (bundle.Value == null) yield break;
+                timer.Reset();
+                timer.Start();
                 yield return FastInitHost.LoadInfoAsset(bundle.Value, dir.Name, full);
+                result.AssetMs = timer.Elapsed.TotalMilliseconds;
+                timer.Reset();
+                timer.Start();
                 if (full.Value != null)
                     result.So = LevelCatalogCache.Extract(dir, result.InfoFile, full.Value);
                 else
                     Log.LogWarning("missing LevelSetInfo in " + dir.Name);
+                result.ExtractMs = timer.Elapsed.TotalMilliseconds;
             }
             finally
             {
@@ -59,7 +68,10 @@ namespace DIYLevelFastInit
                 bundle.Value = null;
                 OnDemandResources.ReleaseCatalogBundle();
             }
+            timer.Reset();
+            timer.Start();
             yield return OnDemandResources.WaitForCleanup();
+            result.CleanupMs = timer.Elapsed.TotalMilliseconds;
         }
 
         internal static SetSnapshot ReadSnapshot(DirectoryInfo dir, FileInfo infoFile)

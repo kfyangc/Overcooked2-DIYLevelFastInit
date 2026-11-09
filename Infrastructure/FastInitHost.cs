@@ -154,19 +154,19 @@ namespace DIYLevelFastInit
         private IEnumerator LoadHeavy(string pluginDir)
         {
             FastInitPlugin.Loading = true;
+            System.Diagnostics.Stopwatch startup = System.Diagnostics.Stopwatch.StartNew();
+            StartupTimings timings = new StartupTimings();
+            double preparationMs = 0, commonMs = 0, catalogMs = 0;
+            bool complete = false;
             try
             {
                 FastInitPlugin.Log.LogInfo("LoadHeavy started");
                 yield return FastInitPlugin.PrepareInfoBundleFiles(pluginDir);
+                preparationMs = startup.Elapsed.TotalMilliseconds;
                 // Plugins like WLoader may already keep commonW1/commonW2 resident in memory;
                 // skipping them saves the 1-2 seconds of reading the whole file just to be
                 // rejected as a duplicate by Unity.
-                HashSet<string> alreadyLoaded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (AssetBundle ab in AssetBundle.GetAllLoadedAssetBundles())
-                {
-                    alreadyLoaded.Add(ab.name);
-                }
-
+                System.Diagnostics.Stopwatch phase = System.Diagnostics.Stopwatch.StartNew();
                 int loaded = 0, skipped = 0, failed = 0;
                 foreach (FileInfo file in SafeGetFiles(new DirectoryInfo(pluginDir), "common*"))
                 {
@@ -174,44 +174,69 @@ namespace DIYLevelFastInit
                     {
                         continue;
                     }
-                    if (alreadyLoaded.Contains(file.Name))
+                    bool resident = false;
+                    // Other loaders can finish a bundle while the preceding request is pending.
+                    foreach (AssetBundle ab in AssetBundle.GetAllLoadedAssetBundles())
+                        if (string.Equals(ab.name, file.Name, StringComparison.OrdinalIgnoreCase)) { resident = true; break; }
+                    if (resident)
                     {
                         skipped++;
                         FastInitPlugin.Log.LogInfo("skip " + file.Name + ": already loaded by another plugin");
                         continue;
                     }
                     Box<AssetBundle> done = new Box<AssetBundle>();
+                    double started = phase.Elapsed.TotalMilliseconds;
                     yield return LoadBundleFile(file.FullName, file.Name, done);
                     if (done.Value != null)
                     {
                         loaded++;
-                        alreadyLoaded.Add(file.Name);
                     }
                     else
                     {
                         failed++;
                     }
+                    FastInitPlugin.Log.LogInfo("common bundle timing [" + file.Name + "]: "
+                        + StartupTimings.Ms(phase.Elapsed.TotalMilliseconds - started) + " ms, loaded=" + (done.Value != null));
                 }
+                commonMs = phase.Elapsed.TotalMilliseconds;
                 FastInitPlugin.Log.LogInfo("common bundles: " + loaded + " loaded, " + skipped + " skipped (dup), " + failed + " failed");
 
+                phase.Reset();
+                phase.Start();
+                System.Diagnostics.Stopwatch slice = System.Diagnostics.Stopwatch.StartNew();
                 List<DirectoryInfo> dirs = SafeGetDirs(Path.Combine(pluginDir, "levels"));
                 FastInitPlugin.TotalSets = dirs.Count;
                 int sets = 0;
                 foreach (DirectoryInfo dir in dirs)
                 {
+                    double pauseStarted = phase.Elapsed.TotalMilliseconds;
                     while (OnDemandResources.IsTransitioning || PseudoPrefabManager.isInCustomLevel)
                         yield return null;
+                    timings.PausedMs += phase.Elapsed.TotalMilliseconds - pauseStarted;
                     InfoLoad load = new InfoLoad();
                     yield return Guard(FastInitPlugin.LoadInfoSet(dir, load), "catalog " + dir.Name);
+                    timings.Add(dir.Name, load);
                     if (load.So == null) continue;
                     DIYLevelAssetBundleManager.levelSetInfos.Add(
                         new KeyValuePair<string, LevelSetInfoSO>(dir.FullName, load.So));
+                    double snapshotStarted = phase.Elapsed.TotalMilliseconds;
                     FastInitPlugin.Snapshots[dir.FullName] = FastInitPlugin.ReadSnapshot(dir, load.InfoFile);
+                    timings.SnapshotMs += phase.Elapsed.TotalMilliseconds - snapshotStarted;
                     sets++;
+                    double menuStarted = phase.Elapsed.TotalMilliseconds;
                     FastInitPlugin.NotifySetAdded();
+                    timings.MenuMs += phase.Elapsed.TotalMilliseconds - menuStarted;
                     FastInitPlugin.Log.LogInfo("level set [" + dir.Name + "] ready (" + sets + " total, metadata only)");
-                    yield return null;
+                    if (slice.Elapsed.TotalMilliseconds >= 4)
+                    {
+                        double yieldStarted = phase.Elapsed.TotalMilliseconds;
+                        yield return null;
+                        timings.YieldWaitMs += phase.Elapsed.TotalMilliseconds - yieldStarted;
+                        slice.Reset();
+                        slice.Start();
+                    }
                 }
+                catalogMs = phase.Elapsed.TotalMilliseconds;
 
                 FastInitPlugin.Log.LogInfo("FastInit complete: " + sets + " level sets available");
 
@@ -220,19 +245,25 @@ namespace DIYLevelFastInit
                 // button snapshot. Every later DLC-menu entry self-checks as well.
                 try
                 {
+                    double menuStarted = startup.Elapsed.TotalMilliseconds;
                     GameObject frontend = GameObject.Find("/Frontend/FrontendParent/FrontendRootMenu");
                     if (frontend != null)
                     {
                         DIYLevelEntryUI.AddUI();
                     }
+                    timings.MenuMs += startup.Elapsed.TotalMilliseconds - menuStarted;
                 }
                 catch (Exception e)
                 {
                     FastInitPlugin.Log.LogDebug("AddUI refresh skipped: " + e.Message);
                 }
+                complete = true;
             }
             finally
             {
+                FastInitPlugin.Log.LogInfo("startup timing: complete=" + complete + ", totalMs=" + StartupTimings.Ms(startup.Elapsed.TotalMilliseconds)
+                    + ", infoPreparationMs=" + StartupTimings.Ms(preparationMs) + ", commonMs=" + StartupTimings.Ms(commonMs)
+                    + ", catalogMs=" + StartupTimings.Ms(catalogMs) + ", " + timings.Summary());
                 _finished = true;
                 FastInitPlugin.FinishLoading();
             }

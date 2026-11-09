@@ -21,6 +21,7 @@ namespace DIYLevelFastInit
             }
             _started = true;
             InfoFilesPreparing = true;
+            System.Diagnostics.Stopwatch timer = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 string pluginDir = GetDiyPluginDir();
@@ -31,6 +32,7 @@ namespace DIYLevelFastInit
                     InfoFilesPreparing = false;
                     return false;
                 }
+                Log.LogInfo("startup synchronous common setup: " + StartupTimings.Ms(timer.Elapsed.TotalMilliseconds) + " ms");
                 GameObject host = new GameObject("DIYLevelFastInitHost");
                 UnityEngine.Object.DontDestroyOnLoad(host);
                 host.AddComponent<FastInitHost>().Run(pluginDir);

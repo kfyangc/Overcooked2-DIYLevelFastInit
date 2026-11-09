@@ -4,6 +4,14 @@
 
 [English README](README.md)
 
+## 测试版 1.7.0.7：启动目录调度与耗时定位
+
+保留 0.10／0.11 双版本兼容。缓存命中的地图包改为按约 4 ms 的工作预算批量处理，不再每包固定等待一帧；预算在包之间检查，单包读取或对象创建仍可能超过预算。目录顺序、完整关卡信息和 SO 身份保持不变。公共资源逐个加载前重新检查当前驻留列表，跳过等待期间被其他插件加载完成的包。冷扫描仍逐包读取并等待安全回收，不并行预加载 info 图。
+
+日志新增 `startup synchronous common setup`、每文件的 `info bundle preparation timing`、`common bundle timing`、`catalog timing` 和总计 `startup timing`。总计区分 info 文件准备、公共资源、目录缓存读取、轻量对象创建、冷扫描包／资源加载、元数据提取写盘、回收等待、快照、菜单、主动暂停和批处理等待帧；缓存未命中会说明文件缺失、info 长度／时间变化或缓存损坏等原因。`bundleMs` 包含依赖图解析和原生容器等待，`extractWriteMs` 包含冷扫描轻量对象创建与缓存写盘，字段不是 CPU 时间；各阶段是包含关系，不能把总计与子项重复相加。缩略图另记录 `thumbnail source warmup timing` 与包含暂停的整体预热耗时。
+
+反馈“进入游戏后加载很久”时，保留从 `LoadHeavy started` 到 `startup timing` 的日志及之后的缩略图预热记录，即可区分目录缓存、公共资源和源图预热。此版不承诺把一分钟降到某个固定值，实际 Unity 读取、对象创建、菜单及联机仍需游戏内复测。离线记录和测试 DLL 位于 `../.verification/startup-1.7.0.7/`。
+
 ## 测试版 1.7.0.6
 
 同一个 DLL 兼容 OC2DIYLevel 0.10.0 和 0.11.0。0.10 保留旧的可选菜谱工厂补丁；0.11 的旧工厂已删除，改为检测并挂钩 `CustomRecipeOptionalRegister.GetOrderDefinitionNode`。继续跟踪自定义菜谱节点、两个模型映射工厂和克隆的预制体；同一结果经过多个入口时由原有所有权集合去重。其他必需补丁仍严格检查，启动日志记录实际选择的可选菜谱入口。

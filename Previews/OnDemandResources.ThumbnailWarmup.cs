@@ -34,6 +34,7 @@ namespace DIYLevelFastInit
                 {
                     _warmQueued = false;
                     int generation = _warmGeneration;
+                    System.Diagnostics.Stopwatch timer = System.Diagnostics.Stopwatch.StartNew();
                     List<KeyValuePair<string, LevelSetInfoSO>> catalog = new List<KeyValuePair<string, LevelSetInfoSO>>(DIYLevelAssetBundleManager.levelSetInfos);
                     HashSet<LevelInfoSO> completed = new HashSet<LevelInfoSO>();
                     ThumbnailDone = ThumbnailTotal = 0;
@@ -51,8 +52,12 @@ namespace DIYLevelFastInit
                                 else missing.Add(level);
                             ThumbnailDone = completed.Count;
                             if (missing.Count == 0) break;
+                            double started = timer.Elapsed.TotalMilliseconds;
                             Box<bool> interrupted = new Box<bool>();
                             yield return FastInitHost.Guard(WarmThumbnailSet(set.Key, missing, generation, interrupted), "thumbnail prewarm " + Path.GetFileName(set.Key));
+                            FastInitPlugin.Log.LogInfo("thumbnail source warmup timing [" + Path.GetFileName(set.Key) + "]: "
+                                + missing.Count + " missing, " + StartupTimings.Ms(timer.Elapsed.TotalMilliseconds - started)
+                                + " ms elapsed, interrupted=" + interrupted.Value);
                             if (generation != _warmGeneration) break;
                             yield return WaitForCleanup();
                             if (interrupted.Value) continue;
@@ -66,7 +71,8 @@ namespace DIYLevelFastInit
                     }
                     if (generation == _warmGeneration)
                     {
-                        string message = "thumbnail prewarm complete: " + ThumbnailDone + "/" + ThumbnailTotal + " disk entries ready";
+                        string message = "thumbnail prewarm complete: " + ThumbnailDone + "/" + ThumbnailTotal + " disk entries ready ("
+                            + StartupTimings.Ms(timer.Elapsed.TotalMilliseconds) + " ms elapsed, including pauses)";
                         if (ThumbnailDone == ThumbnailTotal) FastInitPlugin.Log.LogInfo(message);
                         else FastInitPlugin.Log.LogWarning(message + "; unavailable entries will load on demand");
                     }

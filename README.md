@@ -4,6 +4,14 @@ Startup and memory optimization for the [OC2DIYLevel](https://github.com/gua248/
 
 [中文说明](README_CN.md)
 
+## Test version 1.7.0.7: startup scheduling and timings
+
+Retain support for both DIYLevel versions. Process warm catalog sets within an approximately 4 ms work budget instead of yielding a frame after every set. Check the budget between sets; one set's I/O or object creation can exceed it. Keep directory order and stable, complete lightweight SOs. Recheck resident common bundles before each load so bundles completed by another plugin during an earlier wait are skipped. Cold discovery remains sequential and waits for safe collection between source sets.
+
+New logs separate synchronous common setup, per-file info preparation, per-bundle common loading, cache reads, lightweight object creation, native container/asset waits, extraction/cache writes, cleanup waits, snapshots, menus, transition pauses and budget yields. Look for `catalog cache miss`, `catalog timing` and the final `startup timing`. Container timing includes dependency graph work; extraction timing includes cold lightweight creation and writing. Timings are wall time and nested phase totals must not be added twice. Thumbnail source warmup and its overall elapsed time, including pauses, are logged separately.
+
+For a slow startup report, retain logs from `LoadHeavy started` through `startup timing`, plus subsequent thumbnail warmup records. Offline records and the test DLL are under `../.verification/startup-1.7.0.7/`. Native Unity I/O, object creation, menus and multiplayer still require gameplay verification; no fixed startup speedup is claimed.
+
 ## Test version 1.7.0.6
 
 Support both OC2DIYLevel 0.10.0 and 0.11.0 with the same DLL. Keep the legacy optional-recipe factory hook on 0.10; detect and hook `CustomRecipeOptionalRegister.GetOrderDefinitionNode` on 0.11, where the old factory was removed. Retain tracking for custom recipe nodes, both lookup factories and cloned prefabs. Shared results are deduplicated by the existing ownership sets. Other required hooks remain strict. The selected optional-recipe target is logged at startup.
