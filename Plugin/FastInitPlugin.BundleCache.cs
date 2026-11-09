@@ -14,6 +14,8 @@ namespace DIYLevelFastInit
             {
                 UseIndividualLevelAssets = Config.Bind("Loading", "EnableIndividualLevelAssets", true,
                     "Load the selected LevelInfo asset when its address is unambiguous; fall back to LevelSetInfo when needed. Restart after changing this option.").Value;
+                UseDirectCatalogReader = Config.Bind("Loading", "EnableDirectCatalogReader", true,
+                    "Build missing catalog files by reading scalar metadata without native info assets. Unsupported bundles fall back to the native scanner. Restart after changing this option.").Value;
                 OptimizeInfoFilesOnStartup = Config.Bind("Loading", "OptimizeInfoBundlesOnStartup", true,
                     "Check custom-level info bundles on startup and replace supported LZMA files with equivalent LZ4 files before discovering levels. Original files are backed up beside each set. Restart after changing this option.").Value;
                 RestoreInfoFilesOnStartup = Config.Bind("Loading", "RestoreOriginalInfoBundlesOnStartup", false,

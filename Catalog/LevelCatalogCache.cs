@@ -19,25 +19,55 @@ namespace DIYLevelFastInit
             }
         }
 
-        internal static LevelSetInfoSO TryRead(DirectoryInfo dir, FileInfo file)
+        internal static SetMetadata ReadCachedData(DirectoryInfo dir, FileInfo file, out string miss)
         {
+            miss = null;
             try
             {
                 string path = CachePath(dir);
-                if (!File.Exists(path) || new FileInfo(path).Length > 8 * 1024 * 1024) return null;
+                if (!File.Exists(path)) { miss = "missing file"; return null; }
+                if (new FileInfo(path).Length > 8 * 1024 * 1024) { miss = "oversized file"; return null; }
                 SetMetadata data;
                 using (FileStream stream = File.OpenRead(path))
                 using (BinaryReader reader = new BinaryReader(stream, Encoding.UTF8)) data = ReadData(reader);
-                if (data == null || !data.IsValid(dir, file)) return null;
+                if (!string.Equals(data.directory, dir.FullName, StringComparison.OrdinalIgnoreCase)) miss = "directory changed";
+                else if (data.infoFile != file.Name) miss = "info filename changed";
+                else if (data.length != file.Length) miss = "info length changed";
+                else if (data.modified != file.LastWriteTimeUtc.Ticks) miss = "info timestamp changed";
+                else if (!data.IsValid(dir, file)) miss = "invalid metadata";
+                return miss == null ? data : null;
+            }
+            catch (Exception e)
+            {
+                miss = "unreadable cache (" + e.GetType().Name + ")";
+                FastInitPlugin.Log.LogWarning("catalog cache ignored [" + dir.Name + "]: " + e.Message);
+                return null;
+            }
+        }
+
+        internal static LevelSetInfoSO TryRead(DirectoryInfo dir, FileInfo file, InfoLoad timing)
+        {
+            System.Diagnostics.Stopwatch timer = System.Diagnostics.Stopwatch.StartNew();
+            SetMetadata data = ReadCachedData(dir, file, out timing.CacheMiss);
+            timing.CacheReadMs = timer.Elapsed.TotalMilliseconds;
+            if (data == null) return null;
+            timer.Reset();
+            timer.Start();
+            try
+            {
                 LevelSetInfoSO result = data.Create();
+                timer.Stop();
+                timing.CacheHit = true;
                 FastInitPlugin.Log.LogInfo("catalog cache hit: " + dir.Name);
                 return result;
             }
             catch (Exception e)
             {
+                timing.CacheMiss = "object creation failed (" + e.GetType().Name + ")";
                 FastInitPlugin.Log.LogWarning("catalog cache ignored [" + dir.Name + "]: " + e.Message);
                 return null;
             }
+            finally { timing.CreateMs = timer.Elapsed.TotalMilliseconds; }
         }
 
         internal static LevelSetInfoSO Extract(DirectoryInfo dir, FileInfo file, LevelSetInfoSO full)
@@ -64,16 +94,21 @@ namespace DIYLevelFastInit
                             PlayerMetadata.From(level.config_3p), PlayerMetadata.From(level.config_4p) }
                     };
                 }
-                if (!data.IsValid(dir, file)) throw new IOException("Invalid level catalog");
-                LevelSetInfoSO result = data.Create();
-                Write(dir, data);
-                return result;
+                return CreateAndStore(dir, file, data);
             }
             catch (Exception e)
             {
                 FastInitPlugin.Log.LogError("catalog extraction failed [" + dir.Name + "]: " + e);
                 return null;
             }
+        }
+
+        internal static LevelSetInfoSO CreateAndStore(DirectoryInfo dir, FileInfo file, SetMetadata data)
+        {
+            if (!data.IsValid(dir, file)) throw new IOException("Invalid level catalog");
+            LevelSetInfoSO result = data.Create();
+            Write(dir, data);
+            return result;
         }
 
         private static void Write(DirectoryInfo dir, SetMetadata data)

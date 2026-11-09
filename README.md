@@ -4,6 +4,22 @@ Startup and memory optimization for the [OC2DIYLevel](https://github.com/gua248/
 
 [中文说明](README_CN.md)
 
+## Test version 1.7.0.8: build missing catalogs without native info graphs
+
+First-time `.catalog` generation previously loaded the complete native `LevelSetInfo` graph, extracted scalar values and waited for unused-asset collection between sets. A single managed worker now first attempts to read names, UID, scene names, dependency names and all four player settings directly from serialized bytes. Only the main thread creates lightweight SOs and writes the existing cache format. Successful direct reads avoid native info assets and their per-set collection; existing caches, catalog order and identity rules remain intact. Both DIYLevel versions remain supported.
+
+The reader validates actual LevelEditorStub script identities and type-tree layouts in little-endian serialized v17 files with bounded independent LZ4/raw UnityFS blocks. Unknown layouts, external scalar pointers or failed reads fall back to native discovery. Startup conversion still runs first according to the existing settings; unconverted LZMA inputs fall back and initial conversion time remains. Set `Loading.EnableDirectCatalogReader=false` and restart to use native discovery. Thumbnail warmup remains a separate later phase.
+
+Look for `catalog metadata read`, `source=metadata`, `catalog metadata fallback`, `metadataSets` and `metadataReadMs`. Offline comparison matched 8,791 scalar values across 24 real bundles and 193 levels against independent UnityPy extraction. Direct parsing took approximately 0.54 seconds, excluding conversion, native SO creation, common resources and menus. The two archived LZMA inputs were converted only as workspace copies. A production-source scheduler check generated all 50 missing caches without native info loads or collection calls, with controlled Unity boundaries. Unsupported schemas/pointers, corrupt caches and cancellation were also checked. Native gameplay and multiplayer remain untested. Records and the DLL are under `../.verification/cold-catalog-1.7.0.8/`.
+
+## Test version 1.7.0.7: startup scheduling and timings
+
+Retain support for both DIYLevel versions. Process warm catalog sets within an approximately 4 ms work budget instead of yielding a frame after every set. Check the budget between sets; one set's I/O or object creation can exceed it. Keep directory order and stable, complete lightweight SOs. Recheck resident common bundles before each load so bundles completed by another plugin during an earlier wait are skipped. Cold discovery remains sequential and waits for safe collection between source sets.
+
+New logs separate synchronous common setup, per-file info preparation, per-bundle common loading, cache reads, lightweight object creation, native container/asset waits, extraction/cache writes, cleanup waits, snapshots, menus, transition pauses and budget yields. Look for `catalog cache miss`, `catalog timing` and the final `startup timing`. Container timing includes dependency graph work; extraction timing includes cold lightweight creation and writing. Timings are wall time and nested phase totals must not be added twice. Thumbnail source warmup and its overall elapsed time, including pauses, are logged separately.
+
+For a slow startup report, retain logs from `LoadHeavy started` through `startup timing`, plus subsequent thumbnail warmup records. Offline records and the test DLL are under `../.verification/startup-1.7.0.7/`. Native Unity I/O, object creation, menus and multiplayer still require gameplay verification; no fixed startup speedup is claimed.
+
 ## Test version 1.7.0.6
 
 Support both OC2DIYLevel 0.10.0 and 0.11.0 with the same DLL. Keep the legacy optional-recipe factory hook on 0.10; detect and hook `CustomRecipeOptionalRegister.GetOrderDefinitionNode` on 0.11, where the old factory was removed. Retain tracking for custom recipe nodes, both lookup factories and cloned prefabs. Shared results are deduplicated by the existing ownership sets. Other required hooks remain strict. The selected optional-recipe target is logged at startup.

@@ -4,6 +4,24 @@
 
 [English README](README.md)
 
+## 测试版 1.7.0.8：加速首次生成关卡索引
+
+针对首次向 `BepInEx/cache/DIYLevelFastInit/` 创建 `.catalog` 很慢的情况：原路径先让 Unity 加载完整 `LevelSetInfo` 及其引用的配方、截图、音频等对象，提取少量标量信息后，再逐包等待资源回收。现在优先在单个后台线程直接读取资源包内的名称、UID、场景名、依赖名称和四种人数的设置，主线程仅创建轻量目录 SO 并写出原格式的索引；成功时无需加载原生 info 资源图或为每包等待其回收。现有索引继续复用，目录顺序与对象身份规则不变，仍兼容 0.10／0.11。
+
+直接读取适用于带类型树的 serialized v17、小块独立 LZ4／未压缩 UnityFS 包，校验实际脚本类型及字段布局。不支持的布局、外部标量引用或读取异常自动回退原扫描。启动 info 转码仍按原设置先执行；尚未转换的 LZMA 包会回退，首次转换本身的等待仍然存在。可将 `Loading.EnableDirectCatalogReader=false` 并重启，恢复原扫描路径。
+
+日志 `catalog metadata read`／`source=metadata` 表示直接建索引；`catalog metadata fallback` 说明回退原因，`startup timing` 增加 `metadataSets` 和 `metadataReadMs`。缩略图预生成是后续独立阶段，这次优化不移除它。
+
+离线验证：24 个真实包、193 张关卡、8,791 项标量值与独立 UnityPy 提取一致，直接解析合计约 0.54 秒；0.11 的两个 LZMA 原件先在验证目录内转换副本。50 包无索引的调度检查成功生成全部缓存，没有调用原生 info 加载或资源回收，并覆盖损坏索引回退、异常类型／指针／格式拒绝和取消。上述速度不是游戏内完整启动耗时：不含首次转码、Unity 轻量 SO 创建、公共资源和菜单。实际 Unity 加载与联机仍需复测。记录和测试 DLL 位于 `../.verification/cold-catalog-1.7.0.8/`。
+
+## 测试版 1.7.0.7：启动目录调度与耗时定位
+
+保留 0.10／0.11 双版本兼容。缓存命中的地图包改为按约 4 ms 的工作预算批量处理，不再每包固定等待一帧；预算在包之间检查，单包读取或对象创建仍可能超过预算。目录顺序、完整关卡信息和 SO 身份保持不变。公共资源逐个加载前重新检查当前驻留列表，跳过等待期间被其他插件加载完成的包。冷扫描仍逐包读取并等待安全回收，不并行预加载 info 图。
+
+日志新增 `startup synchronous common setup`、每文件的 `info bundle preparation timing`、`common bundle timing`、`catalog timing` 和总计 `startup timing`。总计区分 info 文件准备、公共资源、目录缓存读取、轻量对象创建、冷扫描包／资源加载、元数据提取写盘、回收等待、快照、菜单、主动暂停和批处理等待帧；缓存未命中会说明文件缺失、info 长度／时间变化或缓存损坏等原因。`bundleMs` 包含依赖图解析和原生容器等待，`extractWriteMs` 包含冷扫描轻量对象创建与缓存写盘，字段不是 CPU 时间；各阶段是包含关系，不能把总计与子项重复相加。缩略图另记录 `thumbnail source warmup timing` 与包含暂停的整体预热耗时。
+
+反馈“进入游戏后加载很久”时，保留从 `LoadHeavy started` 到 `startup timing` 的日志及之后的缩略图预热记录，即可区分目录缓存、公共资源和源图预热。此版不承诺把一分钟降到某个固定值，实际 Unity 读取、对象创建、菜单及联机仍需游戏内复测。离线记录和测试 DLL 位于 `../.verification/startup-1.7.0.7/`。
+
 ## 测试版 1.7.0.6
 
 同一个 DLL 兼容 OC2DIYLevel 0.10.0 和 0.11.0。0.10 保留旧的可选菜谱工厂补丁；0.11 的旧工厂已删除，改为检测并挂钩 `CustomRecipeOptionalRegister.GetOrderDefinitionNode`。继续跟踪自定义菜谱节点、两个模型映射工厂和克隆的预制体；同一结果经过多个入口时由原有所有权集合去重。其他必需补丁仍严格检查，启动日志记录实际选择的可选菜谱入口。

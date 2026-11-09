@@ -2,7 +2,7 @@
 
 BepInEx 5 plugin (net35) that patches
 [OC2DIYLevel](https://github.com/gua248/Overcooked2-LevelEditor) 0.10.0 and 0.11.0 for Overcooked! 2.
-Test version 1.7.0.6 keeps a complete lightweight level catalog while loading info resources
+Version 1.8.0 keeps a complete lightweight level catalog while loading info resources
 and building configurations only for the selected level. Async discovery, menu healing,
 the progress indicator, and incremental hot reload remain supported.
 
@@ -10,7 +10,8 @@ the progress indicator, and incremental hot reload remain supported.
 
 - `FastInitPlugin.cs`: plugin identity, shared fields and lifecycle hooks.
 - `Plugin/`: common initialization and progress rendering.
-- `Catalog/`: metadata models, disk/scene caches, discovery and incremental refresh.
+- `Catalog/`: metadata models, disk/scene caches, direct serialized metadata reading,
+  discovery and incremental refresh.
 - `Frontend/`: menu rebuilding, save-dialog hooks and confirmed save-choice state.
 - `Networking/`: copied client load requests and the remote entry gate.
 - `Resources/`: shared state/hook registration, info bundles, level preparation,
@@ -28,6 +29,9 @@ The 1.6.11 split preserves all 23 top-level types and 410 original members, apar
 the version constant and partial declarations. It adds no loading or save behaviour.
 
 ## Build / deploy / verify
+
+- Do not launch the game without the user's explicit permission. Requests to test,
+  retest, benchmark, verify or debug do not by themselves authorize launching the game.
 
 ```powershell
 dotnet build -c Release                      # uses default GameDir from csproj
@@ -78,11 +82,32 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   `FastInitHost` loads the remaining `common*` dependencies in the background.
   `IsInitialized` (= `commonBundle != null`) must become true synchronously because the
   original consumer patches check it. Initialization is idempotent.
-- Discovery consumes info bundles one at a time in directory order. `LoadInfoSet` first
-  tries `LevelCatalogCache`; on a miss it asynchronously loads `LevelSetInfo`, extracts
-  scalar metadata into independent lightweight SOs, clears temporary full-info references,
-  closes the source with `Unload(false)`, and waits for safe unused-asset collection. Discovery pauses during DIY gameplay and transitions. Do not restore
-  unbounded parallel prefetch or full-info retention.
+- Discovery processes sets one at a time in directory order. `LoadInfoSet` first tries
+  `LevelCatalogCache`. On a miss, `CatalogMetadataRequest` reads scalar fields directly
+  from the serialized source on one managed worker. Only the main thread creates
+  lightweight SOs, writes the normal cache and publishes entries. The worker never
+  calls Unity/BepInEx or mutates the shared dependency graph cache. Cancel it on disposal
+  and plugin shutdown; pause publication during DIY gameplay/transitions and recheck the
+  source fingerprint before publication. `Loading.EnableDirectCatalogReader=false`
+  disables this path. Unsupported/failed reads fall back to the original async native
+  `LevelSetInfo` load, extraction, `Unload(false)` and safe unused-asset collection.
+  Do not restore unbounded parallel prefetch or full-info retention.
+- `SerializedCatalogReader` supports little-endian serialized v17 files with type trees
+  in bounded independent LZ4/raw UnityFS blocks. It follows local set/level/player and
+  MonoScript pointers only, validates actual LevelEditorStub script identities, retains
+  field/list order and skips recipe, audio and screenshot references. Unknown layouts,
+  absent fields/type trees, external scalar/script pointers and invalid extents fall back.
+  Source reading holds at most one decoded block (8 MiB limit), bounded metadata and
+  one scalar object buffer. `InfoBundleGraph.CatalogSource` uses a private container
+  parse; never call the shared `Open`/`Required` cache from this worker. It does not open
+  native bundles, require Qichi resource graphs or trigger per-set asset collection.
+- Warm discovery checks an approximately 4 ms work budget between sets instead of
+  yielding after every cache hit. A single set can exceed the budget. Preserve directory
+  order and transition pauses. Recheck resident common bundles before each request,
+  since other loaders can complete bundles while an earlier request is pending.
+  `startup timing` separates preparation/common/catalog phases and catalog subphases;
+  wall-time fields include native/frame waits and must not be double-counted. Cache
+  miss reasons and thumbnail warmup timings distinguish source scans from cache reads.
 - `SetMetadata`, `LevelMetadata`, and `PlayerMetadata` contain only strings, numbers,
   and arrays. `LevelCatalogCache` writes versioned binary `.catalog` files under
   `Paths.CachePath/DIYLevelFastInit/`, named by a SHA-256 hash of the normalized directory
@@ -296,7 +321,8 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 
 - `LoadedSet.Info` is optional and holds only the full-set compatibility fallback;
   `LoadedLevels` stores selected native LevelInfo assets by scene. Public catalog SOs
-  remain lightweight and stable. Cold scalar-catalog discovery still reads full info.
+  remain lightweight and stable. Cold scalar-catalog discovery uses the direct metadata
+  reader when supported; only its compatibility fallback reads the full info graph.
 - Resolve metadata SO names through `LevelAssetIndex` with unique case-insensitive
   basenames. Validate loaded type/name/scene; unknown, ambiguous and failed addresses
   fall back only after native completion and while that consumer is still current.
