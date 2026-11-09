@@ -1,8 +1,16 @@
 # DIYLevelFastInit
 
-Startup and memory optimization for the [OC2DIYLevel](https://github.com/gua248/Overcooked2-LevelEditor) custom-level plugin in *Overcooked! 2*. Requires BepInEx 5 and OC2DIYLevel 0.10.0.
+Startup and memory optimization for the [OC2DIYLevel](https://github.com/gua248/Overcooked2-LevelEditor) custom-level plugin in *Overcooked! 2*. Requires BepInEx 5 and OC2DIYLevel 0.10.0 or 0.11.0.
 
 [中文说明](README_CN.md)
+
+## Test version 1.7.0.6
+
+Support both OC2DIYLevel 0.10.0 and 0.11.0 with the same DLL. Keep the legacy optional-recipe factory hook on 0.10; detect and hook `CustomRecipeOptionalRegister.GetOrderDefinitionNode` on 0.11, where the old factory was removed. Retain tracking for custom recipe nodes, both lookup factories and cloned prefabs. Shared results are deduplicated by the existing ownership sets. Other required hooks remain strict. The selected optional-recipe target is logged at startup.
+
+This test version starts from 1.7.0 and includes only dual-version recipe-hook compatibility. It does not include the separate entry-wait or recipe-cache experiments. Native resource lifetimes and multiplayer still require gameplay verification.
+
+Offline verification passed for both target versions: Release builds, 31 Harmony signatures, 13 reflection members and 96 frontend assertions per version, plus catalog/thumbnail, save-choice and network-message checks. The production recipe installer selected all four expected targets; Unity-dependent factory bodies were replaced with signature-identical empty bodies at the Harmony boundary. Records and the test DLL are under `../.verification/compat-1.7.0.6/`; these checks do not execute native Unity loading or Steam multiplayer.
 
 ## Version 1.7.0
 

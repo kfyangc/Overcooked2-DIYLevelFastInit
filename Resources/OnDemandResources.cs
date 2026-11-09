@@ -127,13 +127,26 @@ namespace DIYLevelFastInit
                 prefix: new HarmonyMethod(typeof(OnDemandResources), nameof(ConfigPrefix)),
                 postfix: new HarmonyMethod(typeof(OnDemandResources), nameof(ConfigPostfix)),
                 finalizer: new HarmonyMethod(typeof(OnDemandResources), nameof(ConfigFinalizer)));
+            InstallRecipeHooks(harmony);
+            SceneManager.sceneLoaded += SceneLoaded;
+            SceneManager.sceneUnloaded += SceneUnloaded;
+        }
+
+        private static void InstallRecipeHooks(Harmony harmony)
+        {
+            Type optionalOwner = typeof(RecipeHelper);
+            string optionalFactory = "GetOrderDefinitionNodeCustomRecipeOptional";
+            if (AccessTools.Method(optionalOwner, optionalFactory) == null)
+            {
+                optionalOwner = typeof(RecipeHelper).Assembly.GetType("OC2DIYLevel.CustomRecipeOptionalRegister", true);
+                optionalFactory = "GetOrderDefinitionNode";
+            }
             Patch(harmony, typeof(RecipeHelper), "GetOrderDefinitionNodeCustomRecipe", null, nameof(CustomRecipePostfix));
-            Patch(harmony, typeof(RecipeHelper), "GetOrderDefinitionNodeCustomRecipeOptional", null, nameof(CustomRecipePostfix));
+            Patch(harmony, optionalOwner, optionalFactory, null, nameof(CustomRecipePostfix));
             foreach (MethodInfo method in typeof(RecipeHelper).GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
                 if (method.Name == "GetOrderToPrefabLookup")
                     harmony.Patch(method, postfix: new HarmonyMethod(typeof(OnDemandResources), nameof(OwnedPostfix)));
-            SceneManager.sceneLoaded += SceneLoaded;
-            SceneManager.sceneUnloaded += SceneUnloaded;
+            FastInitPlugin.Log.LogInfo("optional recipe resource hook: " + optionalOwner.FullName + "." + optionalFactory);
         }
 
         private static void Patch(Harmony harmony, Type type, string name, string prefix, string postfix)
