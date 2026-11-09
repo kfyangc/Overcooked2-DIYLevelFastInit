@@ -1,8 +1,16 @@
 # DIYLevelFastInit
 
-《Overcooked! 2》[OC2DIYLevel](https://github.com/gua248/Overcooked2-LevelEditor) 的启动与内存优化补丁。需要 BepInEx 5 和 OC2DIYLevel 0.10.0。
+《Overcooked! 2》[OC2DIYLevel](https://github.com/gua248/Overcooked2-LevelEditor) 的启动与内存优化补丁。需要 BepInEx 5 和 OC2DIYLevel 0.10.0 或 0.11.0。
 
 [English README](README.md)
+
+## 测试版 1.7.0.6
+
+同一个 DLL 兼容 OC2DIYLevel 0.10.0 和 0.11.0。0.10 保留旧的可选菜谱工厂补丁；0.11 的旧工厂已删除，改为检测并挂钩 `CustomRecipeOptionalRegister.GetOrderDefinitionNode`。继续跟踪自定义菜谱节点、两个模型映射工厂和克隆的预制体；同一结果经过多个入口时由原有所有权集合去重。其他必需补丁仍严格检查，启动日志记录实际选择的可选菜谱入口。
+
+此测试版从 1.7.0 修改，仅包含双版本菜谱补丁兼容，不包含独立分支中的进图等待或菜谱缓存实验。原生资源生命周期和实际联机仍需游戏内验证。
+
+两个目标版本均通过离线检查：Release 构建、每版 31 个 Harmony 签名、13 个反射成员和 96 项前端断言，以及目录／缩略图、选档状态和网络消息检查。生产菜谱安装函数选中了对应版本的四个目标；检查时在 Harmony 边界将依赖 Unity 的工厂方法体替换为签名相同的空实现。记录和测试 DLL 位于 `../.verification/compat-1.7.0.6/`，未执行 Unity 原生加载或 Steam 实际联机。
 
 ## 1.7.0
 
