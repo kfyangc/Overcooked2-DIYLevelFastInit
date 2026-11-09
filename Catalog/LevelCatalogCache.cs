@@ -94,16 +94,21 @@ namespace DIYLevelFastInit
                             PlayerMetadata.From(level.config_3p), PlayerMetadata.From(level.config_4p) }
                     };
                 }
-                if (!data.IsValid(dir, file)) throw new IOException("Invalid level catalog");
-                LevelSetInfoSO result = data.Create();
-                Write(dir, data);
-                return result;
+                return CreateAndStore(dir, file, data);
             }
             catch (Exception e)
             {
                 FastInitPlugin.Log.LogError("catalog extraction failed [" + dir.Name + "]: " + e);
                 return null;
             }
+        }
+
+        internal static LevelSetInfoSO CreateAndStore(DirectoryInfo dir, FileInfo file, SetMetadata data)
+        {
+            if (!data.IsValid(dir, file)) throw new IOException("Invalid level catalog");
+            LevelSetInfoSO result = data.Create();
+            Write(dir, data);
+            return result;
         }
 
         private static void Write(DirectoryInfo dir, SetMetadata data)

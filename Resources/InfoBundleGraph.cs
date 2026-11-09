@@ -6,7 +6,7 @@ using System.Text;
 namespace DIYLevelFastInit
 {
 
-    internal static class InfoBundleGraph
+    internal static partial class InfoBundleGraph
     {
         private sealed class Block
         {
@@ -80,7 +80,15 @@ namespace DIYLevelFastInit
             Source source;
             if (Sources.TryGetValue(path, out source) && source.Length == file.Length
                 && source.Modified == file.LastWriteTimeUtc.Ticks) return source;
-            source = new Source { Path = path, Length = file.Length, Modified = file.LastWriteTimeUtc.Ticks };
+            source = ReadSource(file);
+            Sources[path] = source;
+            return source;
+        }
+
+        private static Source ReadSource(FileInfo file)
+        {
+            string path = file.FullName;
+            Source source = new Source { Path = path, Length = file.Length, Modified = file.LastWriteTimeUtc.Ticks };
             using (FileStream stream = File.OpenRead(path))
             using (BinaryReader reader = new BinaryReader(stream))
             {
@@ -118,7 +126,6 @@ namespace DIYLevelFastInit
                     }
                 }
             }
-            Sources[path] = source;
             return source;
         }
 

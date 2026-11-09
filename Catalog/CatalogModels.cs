@@ -12,8 +12,9 @@ namespace DIYLevelFastInit
         public LevelSetInfoSO So;
         public FileInfo InfoFile;
         public bool CacheHit;
+        public bool MetadataHit;
         public string CacheMiss;
-        public double CacheReadMs, CreateMs, BundleMs, AssetMs, ExtractMs, CleanupMs;
+        public double CacheReadMs, CreateMs, MetadataReadMs, PublicationPauseMs, BundleMs, AssetMs, ExtractMs, CleanupMs;
     }
 
     // Per-set disk fingerprint taken at load time; sync diffs against it.
