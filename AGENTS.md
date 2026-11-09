@@ -30,6 +30,9 @@ the version constant and partial declarations. It adds no loading or save behavi
 
 ## Build / deploy / verify
 
+- Do not launch the game without the user's explicit permission. Requests to test,
+  retest, benchmark, verify or debug do not by themselves authorize launching the game.
+
 ```powershell
 dotnet build -c Release                      # uses default GameDir from csproj
 dotnet build -c Release -p:GameDir="C:\Path\To\Overcooked! 2"
