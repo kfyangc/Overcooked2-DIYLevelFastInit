@@ -35,6 +35,11 @@ namespace DIYLevelFastInit
 
         internal static Result Optimize(string source, Func<bool> cancelled, Action<string> log, out long preparedLength, out long preparedModified, BundleWorkScheduler scheduler)
         {
+            return Optimize(source, cancelled, log, out preparedLength, out preparedModified, scheduler, null);
+        }
+
+        internal static Result Optimize(string source, Func<bool> cancelled, Action<string> log, out long preparedLength, out long preparedModified, BundleWorkScheduler scheduler, UnityFsRepacker.WorkPlan plan)
+        {
             preparedLength = preparedModified = 0;
             string converted = null, recordTemporary = null;
             try
@@ -44,6 +49,7 @@ namespace DIYLevelFastInit
                 string directory = WorkDirectory(source);
                 using (IDisposable guard = Lock(directory, source))
                 {
+                    UnityFsRepacker.CheckPlan(source, plan);
                     FileInfo initial = new FileInfo(source);
                     long initialLength = initial.Length, initialModified = initial.LastWriteTimeUtc.Ticks;
                     if (UnityFsRepacker.IsHighCompression(source))
@@ -64,7 +70,7 @@ namespace DIYLevelFastInit
                     long length = stamp.Length, ticks = stamp.LastWriteTimeUtc.Ticks;
                     Log(log, "level bundle optimization started: " + source);
                     converted = Unique(directory, "converted-", ".tmp");
-                    UnityFsRepacker.ConversionResult result = UnityFsRepacker.Convert(source, converted, cancelled, null, scheduler);
+                    UnityFsRepacker.ConversionResult result = UnityFsRepacker.Convert(source, converted, cancelled, null, scheduler, plan);
                     UnityFsRepacker.ValidateConverted(source, converted, result, cancelled);
                     CheckCancelled(cancelled);
                     if (result == null || result.SourceLength != length || !ValidHash(result.SourceHash) || !ValidHash(result.OutputHash))

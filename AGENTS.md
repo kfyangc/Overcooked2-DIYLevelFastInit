@@ -347,10 +347,14 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   bit `0x40`; the installed Unity's LZ4 stream callbacks fail. A generic parser or
   successful managed conversion does not establish full native Unity acceptance.
 - `InfoBundleOptimizationBatch` owns a cancellable coordinator and a fixed CPU worker
-  pool shared by file and info-block jobs. `Loading.MaxConcurrentConversionSets` defaults
-  to 4 (minimum 1), independently of the logical-processor-sized worker budget. Admit
-  one info file per set plus that set's scene/auxiliary bundles; drain the whole set before admitting
-  its successor. Other bundles have no separate quota or intra-file parallelism. Callbacks
+  pool shared by files and block jobs. Files strictly larger than
+  `Loading.ParallelConversionThresholdMiB` (default 10) encode blocks in parallel,
+  regardless of basename; smaller info/scene/auxiliary files remain serial internally.
+  `Loading.ConversionMemoryBudgetMiB` defaults to 800 (16–2048). Reserve the larger of
+  disk size and estimated codec/metadata/buffer memory before queueing, and wait for
+  completion to release sufficient capacity. Queued and running jobs retain their
+  reservations through validation/replacement and block draining. There is no set
+  admission limit; the legacy `MaxConcurrentConversionSets` setting is ignored. Callbacks
   only enqueue diagnostics; main-thread Update drains them. Retain `InfoFilesPreparing`
   until every queued/running block and file worker has exited, including disposal.
   Never call Unity or BepInEx from a worker.
@@ -391,11 +395,17 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   up to 256 candidate probes and lazy matching. Encode all output blocks as HC, including
   incompressible blocks, to keep all-HC detection idempotent without external receipts.
   Never retain the entire resource payload or clamp the LZMA dictionary.
-- Info blocks use a bounded queue of at most twice the shared worker count per file.
+- Parallel blocks use a bounded queue of at most twice the shared worker count per file.
   Each pool thread owns its encoder; sequential readers own payload hashing and ordered
-  output. Waiting file workers may execute queued blocks/scenes, never another info,
-  so nested work cannot exceed the admitted info limit or deadlock a single worker.
+  output. Waiting file workers may execute queued blocks/serial files, never another
+  parallel file, so one worker can complete nested work without a deadlock.
   Drain block jobs before closing their output stream or releasing replacement guards.
+- The admission estimate includes decoder dictionaries/models, metadata, bounded
+  pending blocks and allocation slack; it is not a process memory limit. Oversized
+  disk files may stream exclusively within their estimated working requirement.
+  Fall back to serial blocks when parallel buffers do not fit; retain/report files
+  whose serial estimate cannot fit instead of waiting forever. Recheck source
+  size/UTC ticks against its plan before allocating conversion buffers.
 
 ## Constraints
 

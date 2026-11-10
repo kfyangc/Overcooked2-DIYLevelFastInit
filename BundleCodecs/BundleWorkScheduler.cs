@@ -4,7 +4,7 @@ using System.Threading;
 
 namespace DIYLevelFastInit.BundleCodecs
 {
-    /// <summary>Shares a fixed worker budget between files and independently encoded info blocks.</summary>
+    /// <summary>Shares a fixed worker budget between files and independently encoded blocks.</summary>
     internal sealed class BundleWorkScheduler : IDisposable
     {
         internal sealed class Job
@@ -16,7 +16,7 @@ namespace DIYLevelFastInit.BundleCodecs
 
         private readonly object _sync = new object();
         private readonly Queue<Job> _files = new Queue<Job>();
-        private readonly Queue<Job> _infos = new Queue<Job>();
+        private readonly Queue<Job> _parallelFiles = new Queue<Job>();
         private readonly Queue<Job> _blocks = new Queue<Job>();
         private readonly Thread[] _workers;
         private bool _stopping;
@@ -50,10 +50,10 @@ namespace DIYLevelFastInit.BundleCodecs
         internal int PeakBlockWorkers { get { lock (_sync) return _peakEncoding; } }
 
         internal Job QueueFile(Action work) { return Queue(work, false, false); }
-        internal Job QueueInfo(Action work) { return Queue(work, false, true); }
+        internal Job QueueParallelFile(Action work) { return Queue(work, false, true); }
         internal Job QueueBlock(Action work) { return Queue(work, true, false); }
 
-        private Job Queue(Action work, bool block, bool info)
+        private Job Queue(Action work, bool block, bool parallel)
         {
             if (work == null) throw new ArgumentNullException("work");
             lock (_sync)
@@ -61,7 +61,7 @@ namespace DIYLevelFastInit.BundleCodecs
                 if (_stopping) throw new ObjectDisposedException("BundleWorkScheduler");
                 Job job = new Job { Work = work };
                 if (block) { _blocks.Enqueue(job); _blocksQueued++; }
-                else if (info) _infos.Enqueue(job);
+                else if (parallel) _parallelFiles.Enqueue(job);
                 else _files.Enqueue(job);
                 Monitor.PulseAll(_sync);
                 return job;
@@ -113,12 +113,12 @@ namespace DIYLevelFastInit.BundleCodecs
                     Job job;
                     lock (_sync)
                     {
-                        while (_blocks.Count == 0 && _infos.Count == 0 && _files.Count == 0)
+                        while (_blocks.Count == 0 && _parallelFiles.Count == 0 && _files.Count == 0)
                         {
                             if (_stopping) return;
                             Monitor.Wait(_sync);
                         }
-                        job = _blocks.Count != 0 ? _blocks.Dequeue() : (_infos.Count != 0 ? _infos.Dequeue() : _files.Dequeue());
+                        job = _blocks.Count != 0 ? _blocks.Dequeue() : (_parallelFiles.Count != 0 ? _parallelFiles.Dequeue() : _files.Dequeue());
                     }
                     Execute(job);
                 }

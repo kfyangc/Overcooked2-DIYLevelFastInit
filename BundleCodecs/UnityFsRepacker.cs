@@ -16,6 +16,12 @@ namespace DIYLevelFastInit.BundleCodecs
             internal int BlockCount;
         }
 
+        internal sealed class WorkPlan
+        {
+            internal long SourceLength, SourceModified, ReservationBytes, WorkingBytes;
+            internal bool Parallel, Exclusive;
+        }
+
         private sealed class Node
         {
             internal long Offset, Size;
@@ -27,6 +33,7 @@ namespace DIYLevelFastInit.BundleCodecs
         {
             internal byte[] UnityVersion, Revision, Hash, Properties;
             internal long DataStart, SourceLength, DataLength;
+            internal long MetadataMemory;
             internal uint Flags, Plain, Packed;
             internal ushort BlockFlags;
             internal readonly List<Node> Nodes = new List<Node>();
@@ -42,6 +49,74 @@ namespace DIYLevelFastInit.BundleCodecs
         private const int ChunkSize = 128 * 1024, CheckSize = 64 * 1024, MaxMetadata = 8 * 1024 * 1024;
         private const long MaxBytes = 2L * 1024 * 1024 * 1024 - 1;
         private const uint MaxDictionary = 64 * 1024 * 1024;
+        internal const long DefaultParallelThresholdBytes = 10L * 1024 * 1024;
+
+        internal static WorkPlan Plan(string path, long threshold, long budget, int workers, bool restore)
+        {
+            FileInfo stamp = new FileInfo(path);
+            WorkPlan plan = new WorkPlan { SourceLength = stamp.Length, SourceModified = stamp.LastWriteTimeUtc.Ticks };
+            plan.Parallel = !restore && plan.SourceLength > threshold;
+            Layout layout = null;
+            if (!restore)
+                using (FileStream input = OpenSource(path))
+                {
+                    try { layout = ReadLayout(input); }
+                    catch (IOException) { plan.Parallel = false; }
+                }
+            plan.WorkingBytes = WorkingMemory(layout, plan.Parallel, workers);
+            if (plan.WorkingBytes > budget && plan.Parallel)
+            {
+                plan.Parallel = false;
+                plan.WorkingBytes = WorkingMemory(layout, false, workers);
+            }
+            if (plan.WorkingBytes > budget)
+                throw new IOException("Conversion needs an estimated " + plan.WorkingBytes + " bytes, exceeding the "
+                    + budget + " byte conversion budget even without parallel blocks; increase ConversionMemoryBudgetMiB");
+            plan.Exclusive = plan.SourceLength > budget;
+            plan.ReservationBytes = plan.Exclusive ? budget : Math.Max(plan.SourceLength, plan.WorkingBytes);
+            CheckPlan(path, plan);
+            return plan;
+        }
+
+        private static long WorkingMemory(Layout layout, bool parallel, int workers)
+        {
+            long memory = 8L * 1024 * 1024;
+            if (layout == null) return memory;
+            long sourceBuffers = CheckSize;
+            if (layout.Properties != null) sourceBuffers += LzmaMemory(layout.Properties);
+            else
+            {
+                long packed = CheckSize, plain = 0;
+                foreach (Block block in layout.Blocks)
+                    if ((block.Flags & 63) != 0)
+                    {
+                        packed = Math.Max(packed, block.Packed); plain = Math.Max(plain, block.Plain);
+                    }
+                sourceBuffers += packed + plain;
+            }
+            long outputBlocks = (layout.DataLength + ChunkSize - 1) / ChunkSize;
+            long outputMetadata = 24 + outputBlocks * 74;
+            foreach (Node node in layout.Nodes) outputMetadata += 128 + node.Name.Length * 2L;
+            long buffers = ChunkSize * 2L + ChunkSize / 255 + 16;
+            long encoding = parallel ? workers * (2L * buffers + 512 * 1024) : 512 * 1024;
+            // Include parser/validation copies and slack for managed allocation overhead.
+            return memory + 2 * (sourceBuffers + layout.MetadataMemory + outputMetadata + buffers + encoding);
+        }
+
+        private static long LzmaMemory(byte[] properties)
+        {
+            uint dictionary = (uint)(properties[1] | properties[2] << 8 | properties[3] << 16 | properties[4] << 24);
+            int lc = properties[0] % 9, lp = properties[0] / 9 % 5;
+            return Math.Max(4096L, dictionary) + (1L << (lc + lp)) * 0x300 * 4 + 64 * 1024;
+        }
+
+        internal static void CheckPlan(string path, WorkPlan plan)
+        {
+            if (plan == null) return;
+            FileInfo stamp = new FileInfo(path);
+            if (stamp.Length != plan.SourceLength || stamp.LastWriteTimeUtc.Ticks != plan.SourceModified)
+                throw new IOException("Source bundle changed after conversion memory planning; original retained");
+        }
 
         internal static bool IsEligible(string path)
         {
@@ -153,11 +228,17 @@ namespace DIYLevelFastInit.BundleCodecs
 
         internal static ConversionResult Convert(string source, string destination, Func<bool> cancelled, Action checkpoint, BundleWorkScheduler scheduler)
         {
+            return Convert(source, destination, cancelled, checkpoint, scheduler, null);
+        }
+
+        internal static ConversionResult Convert(string source, string destination, Func<bool> cancelled, Action checkpoint, BundleWorkScheduler scheduler, WorkPlan plan)
+        {
             if (string.Equals(Path.GetFullPath(source), Path.GetFullPath(destination), StringComparison.OrdinalIgnoreCase))
                 throw new IOException("The source bundle cannot be a conversion destination");
             Check(cancelled, checkpoint);
             using (FileStream input = OpenSource(source))
             {
+                CheckPlan(source, plan);
                 Layout layout = ReadLayout(input);
                 int count = checked((int)((layout.DataLength + ChunkSize - 1) / ChunkSize));
                 int metadataSize = 16 + 4 + count * 10 + 4;
@@ -176,7 +257,7 @@ namespace DIYLevelFastInit.BundleCodecs
                     List<Block> blocks;
                     using (SHA256 hash = SHA256.Create())
                     {
-                        bool parallel = scheduler != null && Path.GetFileName(source).StartsWith("info", StringComparison.OrdinalIgnoreCase);
+                        bool parallel = scheduler != null && (plan == null ? layout.SourceLength > DefaultParallelThresholdBytes : plan.Parallel);
                         using (ChunkOutput sink = new ChunkOutput(output, layout.DataLength, hash, cancelled, checkpoint, parallel ? scheduler : null))
                         {
                             DecodeSource(input, layout, sink, cancelled, checkpoint);
@@ -309,7 +390,15 @@ namespace DIYLevelFastInit.BundleCodecs
             result.DataStart = atEnd ? headerEnd : headerEnd + packed;
             if (metadataStart < headerEnd || metadataStart > stream.Length - packed) throw new IOException("Invalid UnityFS metadata extent");
             stream.Position = metadataStart;
-            byte[] metadata = DecodeMetadata(Exact(stream, packed), plain, (int)(result.Flags & 63));
+            byte[] packedMetadata = Exact(stream, packed);
+            result.MetadataMemory = packed + plain * 2L;
+            if ((result.Flags & 63) == 1 && packedMetadata.Length >= 5)
+            {
+                byte[] properties = new byte[5]; Buffer.BlockCopy(packedMetadata, 0, properties, 0, 5);
+                ValidateProperties(properties);
+                result.MetadataMemory += LzmaMemory(properties);
+            }
+            byte[] metadata = DecodeMetadata(packedMetadata, plain, (int)(result.Flags & 63));
             using (MemoryStream table = new MemoryStream(metadata, false))
             {
                 result.Hash = Exact(table, 16);

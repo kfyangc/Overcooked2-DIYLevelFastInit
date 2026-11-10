@@ -20,8 +20,10 @@ namespace DIYLevelFastInit
                     "Check all top-level UnityFS bundles in custom level sets, including info*, s_* and custom_recipes, and replace supported LZMA/LZ4/raw files with equivalent LZ4HC files before discovering levels. Verified replacements do not retain original files. Restart after changing this option.").Value;
                 RestoreInfoFilesOnStartup = Config.Bind("Loading", "RestoreOriginalInfoBundlesOnStartup", false,
                     "Restore legacy backed-up original bundles on startup. New successful conversions retain no originals. Restoration takes precedence over optimization. Restart after changing this option.").Value;
-                InfoBundleOptimizationBatch.MaxConcurrentSets = Math.Max(1, Config.Bind("Loading", "MaxConcurrentConversionSets", 4,
-                    "Maximum level sets converted at once. Each set runs one info file plus its scene and auxiliary bundles; all work shares CPU workers capped at the available logical processor count. Restart after changing this option.").Value);
+                InfoBundleOptimizationBatch.ParallelThresholdBytes = Math.Max(1, Config.Bind("Loading", "ParallelConversionThresholdMiB", 10,
+                    "Files strictly larger than this on-disk size use parallel 128 KiB HC blocks, regardless of filename. Smaller files encode serially. Restart after changing this option.").Value) * 1024L * 1024;
+                InfoBundleOptimizationBatch.MemoryBudgetBytes = Math.Max(16, Math.Min(2048, Config.Bind("Loading", "ConversionMemoryBudgetMiB", 800,
+                    "Estimated conversion memory budget (16-2048 MiB). File size, decoder dictionaries and bounded HC buffers determine reservations. Queueing waits for released reservations; CPU workers remain capped at the logical processor count. This is not a process memory limit. Restart after changing this option.").Value)) * 1024L * 1024;
                 Log.LogInfo("level bundles use source files directly; runtime LZ4 cache is disabled (legacy cache options are ignored)");
             }
             catch (Exception e) { Log.LogWarning("level bundle startup options unavailable; defaults retained: " + e.Message); }
