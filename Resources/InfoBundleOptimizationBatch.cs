@@ -21,11 +21,10 @@ namespace DIYLevelFastInit
             internal UnityFsRepacker.WorkPlan Plan;
         }
 
-        internal static long ParallelThresholdBytes = UnityFsRepacker.DefaultParallelThresholdBytes;
         internal static long MemoryBudgetBytes = 800L * 1024 * 1024;
         private readonly string[] _paths;
         private readonly bool _restore;
-        private readonly long _threshold, _memoryBudget;
+        private readonly long _memoryBudget;
         private readonly int _workerCount;
         private readonly object _sync = new object();
         private readonly Queue<string> _logs = new Queue<string>();
@@ -40,12 +39,12 @@ namespace DIYLevelFastInit
         private long _reserved, _peakReserved;
 
         internal InfoBundleOptimizationBatch(string[] paths, bool restore)
-            : this(paths, restore, ParallelThresholdBytes, MemoryBudgetBytes, Math.Max(1, Environment.ProcessorCount)) { }
+            : this(paths, restore, MemoryBudgetBytes, Math.Max(1, Environment.ProcessorCount)) { }
 
-        internal InfoBundleOptimizationBatch(string[] paths, bool restore, long threshold, long memoryBudget, int workers)
+        internal InfoBundleOptimizationBatch(string[] paths, bool restore, long memoryBudget, int workers)
         {
             if (paths == null) throw new ArgumentNullException("paths");
-            if (threshold < 0 || memoryBudget < 1 || workers < 1) throw new ArgumentOutOfRangeException("memoryBudget");
+            if (memoryBudget < 1 || workers < 1) throw new ArgumentOutOfRangeException("memoryBudget");
             HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             List<string> unique = new List<string>();
             foreach (string path in paths)
@@ -53,7 +52,7 @@ namespace DIYLevelFastInit
                 string full = Path.GetFullPath(path);
                 if (seen.Add(full)) unique.Add(full);
             }
-            _paths = unique.ToArray(); _restore = restore; _threshold = threshold; _memoryBudget = memoryBudget; _workerCount = workers;
+            _paths = unique.ToArray(); _restore = restore; _memoryBudget = memoryBudget; _workerCount = workers;
         }
 
         internal bool Done { get { return _done; } }
@@ -101,7 +100,7 @@ namespace DIYLevelFastInit
                     if (_cancelled) return;
                     try
                     {
-                        UnityFsRepacker.WorkPlan plan = UnityFsRepacker.Plan(path, _threshold, _memoryBudget, _workerCount, _restore);
+                        UnityFsRepacker.WorkPlan plan = UnityFsRepacker.Plan(path, _memoryBudget, _workerCount, _restore);
                         _files.Add(new FileWork { Path = path, Plan = plan });
                         Log("level bundle memory plan [" + Path.GetFileName(path) + "]: " + plan.ReservationBytes
                             + " bytes reserved, " + plan.WorkingBytes + " estimated working bytes, parallel=" + plan.Parallel
@@ -116,13 +115,20 @@ namespace DIYLevelFastInit
                 using (BundleWorkScheduler scheduler = new BundleWorkScheduler(_workerCount))
                 {
                     _scheduler = scheduler;
-                    Log("level bundle scheduling: " + _memoryBudget + " byte estimated memory budget, " + _threshold
-                        + " byte parallel threshold, " + _workerCount + " shared CPU workers; no level-set limit");
+                    Log("level bundle scheduling: " + _memoryBudget + " byte estimated memory budget, " + _workerCount
+                        + " shared CPU workers; parallel for multiple " + UnityFsRepacker.ChunkSize + " byte decoded blocks; no level-set limit");
                     lock (_sync)
                     {
                         StartFiles();
                         while (_inFlight != 0) Monitor.Wait(_sync);
                     }
+                }
+                HashSet<string> directories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (string path in _paths)
+                {
+                    if (_cancelled) break;
+                    string directory = Path.GetDirectoryName(path);
+                    if (directories.Add(directory)) InfoBundleOptimizer.CleanupWorkDirectory(directory, Log);
                 }
             }
             catch (Exception error) { _cancelled = true; Interlocked.Increment(ref _failed); Log("level bundle worker failed: " + error); }

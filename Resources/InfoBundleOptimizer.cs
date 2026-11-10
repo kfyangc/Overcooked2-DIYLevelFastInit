@@ -272,6 +272,47 @@ namespace DIYLevelFastInit
             return directory;
         }
 
+        internal static void CleanupWorkDirectory(string parent, Action<string> log)
+        {
+            string directory = System.IO.Path.Combine(System.IO.Path.GetFullPath(parent), ".diylevel-fastinit");
+            if (!Directory.Exists(directory)) return;
+            try
+            {
+                if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0) return;
+                string gate = System.IO.Path.Combine(directory, "replace.lock");
+                // Deny new readers/writers while marking the held gate for deletion.
+                using (FileStream guard = new FileStream(gate, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.Delete))
+                {
+                    string[] entries = Directory.GetFileSystemEntries(directory);
+                    foreach (string entry in entries)
+                    {
+                        if (!LockName(System.IO.Path.GetFileName(entry))
+                            || (File.GetAttributes(entry) & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0
+                            || new FileInfo(entry).Length != 0)
+                        {
+                            Log(log, "level bundle work directory retained: recovery, temporary or unknown entry: " + entry);
+                            return;
+                        }
+                    }
+                    foreach (string entry in entries)
+                        if (!string.Equals(entry, gate, StringComparison.OrdinalIgnoreCase)) File.Delete(entry);
+                    File.Delete(gate);
+                }
+                Directory.Delete(directory, false);
+                Log(log, "level bundle work directory removed: " + directory);
+            }
+            catch (Exception error) { Log(log, "level bundle work directory busy or unavailable; retained: " + directory + "\n" + error.Message); }
+        }
+
+        private static bool LockName(string name)
+        {
+            if (string.Equals(name, "replace.lock", StringComparison.OrdinalIgnoreCase)) return true;
+            if (name.Length != 77 || !name.StartsWith("replace-", StringComparison.OrdinalIgnoreCase)
+                || !name.EndsWith(".lock", StringComparison.OrdinalIgnoreCase)) return false;
+            for (int i = 8; i < 72; i++) if (!Uri.IsHexDigit(name[i])) return false;
+            return true;
+        }
+
         private sealed class ReplacementGuard : IDisposable
         {
             internal FileStream Directory, Source;

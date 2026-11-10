@@ -46,23 +46,22 @@ namespace DIYLevelFastInit.BundleCodecs
             internal ushort Flags;
         }
 
-        private const int ChunkSize = 128 * 1024, CheckSize = 64 * 1024, MaxMetadata = 8 * 1024 * 1024;
+        internal const int ChunkSize = 128 * 1024;
+        private const int CheckSize = 64 * 1024, MaxMetadata = 8 * 1024 * 1024;
         private const long MaxBytes = 2L * 1024 * 1024 * 1024 - 1;
         private const uint MaxDictionary = 64 * 1024 * 1024;
-        internal const long DefaultParallelThresholdBytes = 10L * 1024 * 1024;
-
-        internal static WorkPlan Plan(string path, long threshold, long budget, int workers, bool restore)
+        internal static WorkPlan Plan(string path, long budget, int workers, bool restore)
         {
             FileInfo stamp = new FileInfo(path);
             WorkPlan plan = new WorkPlan { SourceLength = stamp.Length, SourceModified = stamp.LastWriteTimeUtc.Ticks };
-            plan.Parallel = !restore && plan.SourceLength > threshold;
             Layout layout = null;
             if (!restore)
                 using (FileStream input = OpenSource(path))
                 {
                     try { layout = ReadLayout(input); }
-                    catch (IOException) { plan.Parallel = false; }
+                    catch (IOException) { }
                 }
+            plan.Parallel = !restore && layout != null && layout.DataLength > ChunkSize;
             plan.WorkingBytes = WorkingMemory(layout, plan.Parallel, workers);
             if (plan.WorkingBytes > budget && plan.Parallel)
             {
@@ -98,7 +97,9 @@ namespace DIYLevelFastInit.BundleCodecs
             long outputMetadata = 24 + outputBlocks * 74;
             foreach (Node node in layout.Nodes) outputMetadata += 128 + node.Name.Length * 2L;
             long buffers = ChunkSize * 2L + ChunkSize / 255 + 16;
-            long encoding = parallel ? workers * (2L * buffers + 512 * 1024) : 512 * 1024;
+            long encoding = parallel
+                ? Math.Min(outputBlocks, workers * 2L) * buffers + Math.Min(outputBlocks, workers) * 512 * 1024
+                : 512 * 1024;
             // Include parser/validation copies and slack for managed allocation overhead.
             return memory + 2 * (sourceBuffers + layout.MetadataMemory + outputMetadata + buffers + encoding);
         }
@@ -257,7 +258,7 @@ namespace DIYLevelFastInit.BundleCodecs
                     List<Block> blocks;
                     using (SHA256 hash = SHA256.Create())
                     {
-                        bool parallel = scheduler != null && (plan == null ? layout.SourceLength > DefaultParallelThresholdBytes : plan.Parallel);
+                        bool parallel = scheduler != null && (plan == null ? layout.DataLength > ChunkSize : plan.Parallel);
                         using (ChunkOutput sink = new ChunkOutput(output, layout.DataLength, hash, cancelled, checkpoint, parallel ? scheduler : null))
                         {
                             DecodeSource(input, layout, sink, cancelled, checkpoint);

@@ -347,9 +347,10 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   bit `0x40`; the installed Unity's LZ4 stream callbacks fail. A generic parser or
   successful managed conversion does not establish full native Unity acceptance.
 - `InfoBundleOptimizationBatch` owns a cancellable coordinator and a fixed CPU worker
-  pool shared by files and block jobs. Files strictly larger than
-  `Loading.ParallelConversionThresholdMiB` (default 10) encode blocks in parallel,
-  regardless of basename; smaller info/scene/auxiliary files remain serial internally.
+  pool shared by files and block jobs. Decoded payloads strictly larger than the
+  native 128 KiB output chunk encode multiple blocks in parallel, regardless of
+  basename or compressed disk size; single-block payloads remain serial internally.
+  The old `ParallelConversionThresholdMiB` setting is ignored.
   `Loading.ConversionMemoryBudgetMiB` defaults to 800 (16–2048). Reserve the larger of
   disk size and estimated codec/metadata/buffer memory before queueing, and wait for
   completion to release sufficient capacity. Queued and running jobs retain their
@@ -371,6 +372,12 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 - New replacements share the old directory guard and take an exclusive lock keyed
   by the source basename. This allows different files in one set to run concurrently
   while excluding older processes that take the directory guard exclusively.
+- After a non-cancelled batch has drained/disposed every worker, remove a set's
+  `.diylevel-fastinit` only if it contains exclusively empty optimizer lock files.
+  Hold the directory gate exclusively during lock cleanup, allow gate deletion and
+  close it before deleting the empty directory non-recursively. Busy locks, recovery
+  data, temporary/unknown entries, subdirectories and reparse points must remain.
+  Loading never depends on persistent lock files; later operations recreate them.
 - Use the installed Mono's supported atomic File.Replace with a unique backup. There
   is no truncate/copy-over-source fallback. Recheck source identity/hash under an
   exclusive handle before commit; verify the captured backup and new source afterward.

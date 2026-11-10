@@ -12,9 +12,11 @@
 
 替换及哈希校验成功后，删除本次捕获的原文件和恢复记录；替换失败则保留恢复文件。后续检查旧 `original-*.bundle`／`.record` 时，仅在当前优化文件与原件备份均匹配记录哈希时清理，其他无效、被改动或无法确认归属的恢复数据保留并记录原因。新转换成功后没有原件可供恢复。
 
+整批任务完成、所有工作线程退出并释放锁后，若 `.diylevel-fastinit` 内只剩空闲的空锁文件，就删除锁文件及该目录。清理时先独占目录锁；仍被其他实例占用，或包含恢复数据、临时文件、未知文件及子目录时保留。后续关卡加载不依赖该目录；下次转换或恢复时会按需重建锁。
+
 配置名 `Loading.OptimizeInfoBundlesOnStartup` 保持兼容，控制所有识别出的关卡集资源包的 HC 转换；`Loading.RestoreOriginalInfoBundlesOnStartup` 仅用于仍保留的历史备份，启动时继续优先于转换。成功日志为 `level bundle optimized in place; original discarded`，统计为 `level bundle optimization complete`。下方版本历史描述的是以前普通 LZ4 与保留备份的行为。
 
-`Loading.ParallelConversionThresholdMiB=10` 控制分块并行阈值：磁盘文件严格大于 10 MiB 时，使用独立的 128 KiB 块并行压缩、按原序写回，不再按文件名前缀区分。较小的文件（包括小 info）内部串行。修改阈值后重启生效。
+HC 并行直接以原生的 128 KiB 输出块为分界，不再按文件名或压缩后的磁盘体积判断：解压后的数据不超过 128 KiB 时内部串行；超过时按多个块并行压缩、按原序写回。旧 `ParallelConversionThresholdMiB` 配置不再生效。
 
 `Loading.ConversionMemoryBudgetMiB=800` 控制转换任务的估算额度，范围为 16–2048 MiB，修改后重启生效。单文件占用额度取磁盘体积与工作缓冲区估算的较大值；估算包含解码字典／模型、元数据、有界块缓冲区、编码器状态及分配余量。协调线程先预留额度再派发，剩余额度不足就等待任务完成、失败或取消后释放。排队和运行中的文件都计入预算，直到校验、替换和块任务清理完成后才释放。所有文件与块任务共享按逻辑处理器数建立的 CPU 线程池；每个文件待处理块不超过线程数的两倍。已取消关卡集数量配额，旧 `MaxConcurrentConversionSets` 配置不再生效。
 
