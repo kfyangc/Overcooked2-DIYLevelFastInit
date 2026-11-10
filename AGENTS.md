@@ -333,19 +333,32 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   uncached preview scene. Keep container/CAB dependencies and cache-file leases until
   their last active, pending, preview or warmup owner has finished.
 
-## Startup info bundle optimization
+## Source level bundle optimization
 
-- The owner authorized replacing `info*` files in 1.6.18. `InfoBundleOptimizer`
-  converts supported single-block LZMA inputs and atomically replaces their original
+- The owner authorized replacing level-set UnityFS bundles, including `info*`, scene
+  `s_*` and auxiliary files such as `custom_recipes`. Read only the eight-byte UnityFS
+  signature when enumerating the set's top-level files; skip other formats and children.
+  `InfoBundleOptimizer`
+  converts supported single-block LZMA and bounded single/multi-block LZ4/raw inputs to
+  LZ4HC, including ordinary independent LZ4 produced by older versions, and atomically replaces their original
   paths only after `ValidateConverted` checks output/source file hashes, complete
   decoded-data hash, block bounds and equivalent versions/CAB/node metadata.
-- Generated independent blocks use flags `0x02`/`0x00`, never the source's Streamed
+- Generated independent blocks use HC compression flag `0x03`, never the source's Streamed
   bit `0x40`; the installed Unity's LZ4 stream callbacks fail. A generic parser or
   successful managed conversion does not establish full native Unity acceptance.
-- `InfoBundleOptimizationBatch` owns one cancellable managed worker. Its callbacks
-  only enqueue diagnostics; main-thread Update drains them. Set `InfoFilesPreparing`
-  before cheap initialization and retain it until the worker has fully exited, including
-  coroutine disposal. Never call Unity or BepInEx from the worker.
+- `InfoBundleOptimizationBatch` owns a cancellable coordinator and a fixed CPU worker
+  pool shared by files and block jobs. Decoded payloads strictly larger than the
+  native 128 KiB output chunk encode multiple blocks in parallel, regardless of
+  basename or compressed disk size; single-block payloads remain serial internally.
+  The old `ParallelConversionThresholdMiB` setting is ignored.
+  `Loading.ConversionMemoryBudgetMiB` defaults to 800 (16–2048). Reserve the larger of
+  disk size and estimated codec/metadata/buffer memory before queueing, and wait for
+  completion to release sufficient capacity. Queued and running jobs retain their
+  reservations through validation/replacement and block draining. There is no set
+  admission limit; the legacy `MaxConcurrentConversionSets` setting is ignored. Callbacks
+  only enqueue diagnostics; main-thread Update drains them. Retain `InfoFilesPreparing`
+  until every queued/running block and file worker has exited, including disposal.
+  Never call Unity or BepInEx from a worker.
 - Complete this startup phase before any info graph/catalog/preview/native request.
   Keep synchronous `common` initialization and IsInitialized timing unchanged. Do not
   replace files during hot refresh. Early remote DIY messages may use a basename-only
@@ -356,22 +369,50 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   GUID temporary files and unique `original-<GUID>.bundle` / `.record` pairs. Never put
   backup/temp files matching `info*` at the set root. Never overwrite an existing backup.
   Record basenames only with bounded lengths; validate record extents and hashes.
+- New replacements share the old directory guard and take an exclusive lock keyed
+  by the source basename. This allows different files in one set to run concurrently
+  while excluding older processes that take the directory guard exclusively.
+- After a non-cancelled batch has drained/disposed every worker, remove a set's
+  `.diylevel-fastinit` only if it contains exclusively empty optimizer lock files.
+  Hold the directory gate exclusively during lock cleanup, allow gate deletion and
+  close it before deleting the empty directory non-recursively. Busy locks, recovery
+  data, temporary/unknown entries, subdirectories and reparse points must remain.
+  Loading never depends on persistent lock files; later operations recreate them.
 - Use the installed Mono's supported atomic File.Replace with a unique backup. There
   is no truncate/copy-over-source fallback. Recheck source identity/hash under an
   exclusive handle before commit; verify the captured backup and new source afterward.
-  Commit and rollback are non-cancellable critical sections retaining both versions.
+  Commit, rollback and successful-original disposal are non-cancellable critical sections.
+  Once both hashes verify, delete the captured original and recovery record. Already
+  independent sources may discard historical originals only when both output/source
+  hashes match their records. Invalid or unrelated recovery files must remain.
   Unsupported, locked and failed inputs retain usable originals; clean only owned temps.
 - Restore mode takes precedence over optimization, only replaces a source matching the
   recorded optimized hash, validates the original backup, and preserves the displaced
-  optimized copy. Never restore over a later map update or corrupt recovery record.
-- Existing independent LZ4/raw layouts skip conversion after bounded structural checks.
+  optimized copy. It covers surviving historical backups only; successful new conversions
+  retain no restorable original. Never restore over a later map update or corrupt record.
+- Existing all-HC (`0x03`) layouts skip conversion after bounded structural checks.
   Do not rewrite their timestamps each startup. File-length/mtime fingerprints must
   invalidate catalog, graph and thumbnail data naturally when replacement occurs.
 - `BundleFileCache` remains legacy managed code for historical compatibility checks;
   production no longer Configure/Queue/Acquire/Tick it or select its physical paths.
   Old bundle-cache options are ignored. Scalar catalog/thumbnail caches are separate.
 - `UnityFsRepacker` streams 128 KiB output blocks with bounded buffers and the original
-  LZMA dictionary. Never retain the entire resource payload or clamp its dictionary.
+  LZMA dictionary. LZ4/raw input blocks have an 8 MiB limit and are decoded one at a time;
+  multiple LZMA blocks remain unsupported. The HC encoder uses a 64 KiB hash-chain window,
+  up to 256 candidate probes and lazy matching. Encode all output blocks as HC, including
+  incompressible blocks, to keep all-HC detection idempotent without external receipts.
+  Never retain the entire resource payload or clamp the LZMA dictionary.
+- Parallel blocks use a bounded queue of at most twice the shared worker count per file.
+  Each pool thread owns its encoder; sequential readers own payload hashing and ordered
+  output. Waiting file workers may execute queued blocks/serial files, never another
+  parallel file, so one worker can complete nested work without a deadlock.
+  Drain block jobs before closing their output stream or releasing replacement guards.
+- The admission estimate includes decoder dictionaries/models, metadata, bounded
+  pending blocks and allocation slack; it is not a process memory limit. Oversized
+  disk files may stream exclusively within their estimated working requirement.
+  Fall back to serial blocks when parallel buffers do not fit; retain/report files
+  whose serial estimate cannot fit instead of waiting forever. Recheck source
+  size/UTC ticks against its plan before allocating conversion buffers.
 
 ## Constraints
 

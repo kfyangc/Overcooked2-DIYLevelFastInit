@@ -6,7 +6,7 @@ using System.Text;
 
 namespace DIYLevelFastInit.BundleCodecs
 {
-    /// <summary>Streams a bounded UnityFS v6 LZMA payload into independent LZ4 blocks.</summary>
+    /// <summary>Streams bounded UnityFS v6 LZMA or LZ4/raw payloads into independent LZ4HC blocks.</summary>
     internal static class UnityFsRepacker
     {
         internal sealed class ConversionResult
@@ -14,6 +14,12 @@ namespace DIYLevelFastInit.BundleCodecs
             internal byte[] SourceHash, DataHash, OutputHash;
             internal long SourceLength, OutputLength, DataLength;
             internal int BlockCount;
+        }
+
+        internal sealed class WorkPlan
+        {
+            internal long SourceLength, SourceModified, ReservationBytes, WorkingBytes;
+            internal bool Parallel, Exclusive;
         }
 
         private sealed class Node
@@ -27,6 +33,7 @@ namespace DIYLevelFastInit.BundleCodecs
         {
             internal byte[] UnityVersion, Revision, Hash, Properties;
             internal long DataStart, SourceLength, DataLength;
+            internal long MetadataMemory;
             internal uint Flags, Plain, Packed;
             internal ushort BlockFlags;
             internal readonly List<Node> Nodes = new List<Node>();
@@ -39,9 +46,78 @@ namespace DIYLevelFastInit.BundleCodecs
             internal ushort Flags;
         }
 
-        private const int ChunkSize = 128 * 1024, CheckSize = 64 * 1024, MaxMetadata = 8 * 1024 * 1024;
+        internal const int ChunkSize = 128 * 1024;
+        private const int CheckSize = 64 * 1024, MaxMetadata = 8 * 1024 * 1024;
         private const long MaxBytes = 2L * 1024 * 1024 * 1024 - 1;
         private const uint MaxDictionary = 64 * 1024 * 1024;
+        internal static WorkPlan Plan(string path, long budget, int workers, bool restore)
+        {
+            FileInfo stamp = new FileInfo(path);
+            WorkPlan plan = new WorkPlan { SourceLength = stamp.Length, SourceModified = stamp.LastWriteTimeUtc.Ticks };
+            Layout layout = null;
+            if (!restore)
+                using (FileStream input = OpenSource(path))
+                {
+                    try { layout = ReadLayout(input); }
+                    catch (IOException) { }
+                }
+            plan.Parallel = !restore && layout != null && layout.DataLength > ChunkSize;
+            plan.WorkingBytes = WorkingMemory(layout, plan.Parallel, workers);
+            if (plan.WorkingBytes > budget && plan.Parallel)
+            {
+                plan.Parallel = false;
+                plan.WorkingBytes = WorkingMemory(layout, false, workers);
+            }
+            if (plan.WorkingBytes > budget)
+                throw new IOException("Conversion needs an estimated " + plan.WorkingBytes + " bytes, exceeding the "
+                    + budget + " byte conversion budget even without parallel blocks; increase ConversionMemoryBudgetMiB");
+            plan.Exclusive = plan.SourceLength > budget;
+            plan.ReservationBytes = plan.Exclusive ? budget : Math.Max(plan.SourceLength, plan.WorkingBytes);
+            CheckPlan(path, plan);
+            return plan;
+        }
+
+        private static long WorkingMemory(Layout layout, bool parallel, int workers)
+        {
+            long memory = 8L * 1024 * 1024;
+            if (layout == null) return memory;
+            long sourceBuffers = CheckSize;
+            if (layout.Properties != null) sourceBuffers += LzmaMemory(layout.Properties);
+            else
+            {
+                long packed = CheckSize, plain = 0;
+                foreach (Block block in layout.Blocks)
+                    if ((block.Flags & 63) != 0)
+                    {
+                        packed = Math.Max(packed, block.Packed); plain = Math.Max(plain, block.Plain);
+                    }
+                sourceBuffers += packed + plain;
+            }
+            long outputBlocks = (layout.DataLength + ChunkSize - 1) / ChunkSize;
+            long outputMetadata = 24 + outputBlocks * 74;
+            foreach (Node node in layout.Nodes) outputMetadata += 128 + node.Name.Length * 2L;
+            long buffers = ChunkSize * 2L + ChunkSize / 255 + 16;
+            long encoding = parallel
+                ? Math.Min(outputBlocks, workers * 2L) * buffers + Math.Min(outputBlocks, workers) * 512 * 1024
+                : 512 * 1024;
+            // Include parser/validation copies and slack for managed allocation overhead.
+            return memory + 2 * (sourceBuffers + layout.MetadataMemory + outputMetadata + buffers + encoding);
+        }
+
+        private static long LzmaMemory(byte[] properties)
+        {
+            uint dictionary = (uint)(properties[1] | properties[2] << 8 | properties[3] << 16 | properties[4] << 24);
+            int lc = properties[0] % 9, lp = properties[0] / 9 % 5;
+            return Math.Max(4096L, dictionary) + (1L << (lc + lp)) * 0x300 * 4 + 64 * 1024;
+        }
+
+        internal static void CheckPlan(string path, WorkPlan plan)
+        {
+            if (plan == null) return;
+            FileInfo stamp = new FileInfo(path);
+            if (stamp.Length != plan.SourceLength || stamp.LastWriteTimeUtc.Ticks != plan.SourceModified)
+                throw new IOException("Source bundle changed after conversion memory planning; original retained");
+        }
 
         internal static bool IsEligible(string path)
         {
@@ -73,6 +149,23 @@ namespace DIYLevelFastInit.BundleCodecs
             catch (System.Security.SecurityException) { return false; }
         }
 
+        internal static bool IsHighCompression(string path)
+        {
+            try
+            {
+                using (FileStream stream = OpenSource(path))
+                    foreach (Block block in ReadIndependentLayout(stream).Blocks)
+                        if (block.Flags != 3) return false;
+                return true;
+            }
+            catch (System.IO.IsolatedStorage.IsolatedStorageException) { return false; }
+            catch (IOException) { return false; }
+            catch (UnauthorizedAccessException) { return false; }
+            catch (ArgumentException) { return false; }
+            catch (NotSupportedException) { return false; }
+            catch (System.Security.SecurityException) { return false; }
+        }
+
         internal static void ValidateConverted(string source, string output, ConversionResult result, Func<bool> cancelled)
         {
             if (result == null || result.SourceLength <= 0 || result.SourceLength > MaxBytes
@@ -86,7 +179,7 @@ namespace DIYLevelFastInit.BundleCodecs
             {
                 Layout before = ReadLayout(input), after = ReadIndependentLayout(converted);
                 if (before.SourceLength != result.SourceLength || after.SourceLength != result.OutputLength
-                    || before.Plain != result.DataLength || after.DataLength != result.DataLength
+                    || before.DataLength != result.DataLength || after.DataLength != result.DataLength
                     || after.Blocks.Count != result.BlockCount || after.Blocks.Count != (result.DataLength + ChunkSize - 1) / ChunkSize
                     || after.Flags != (before.Flags & 64U) || !Same(before.UnityVersion, after.UnityVersion)
                     || !Same(before.Revision, after.Revision) || !Same(before.Hash, after.Hash)
@@ -110,7 +203,7 @@ namespace DIYLevelFastInit.BundleCodecs
                         Block block = after.Blocks[i];
                         if (block.Plain > ChunkSize || block.Packed > packed.Length
                             || (i != after.Blocks.Count - 1 && block.Plain != ChunkSize)
-                            || (block.Flags != 0 && block.Flags != 2)) throw new IOException("Invalid converted UnityFS block");
+                            || block.Flags != 3) throw new IOException("Invalid converted UnityFS HC block");
                         int count = (int)block.Packed, length = (int)block.Plain;
                         ReadExact(converted, packed, count);
                         if (block.Flags == 0) Buffer.BlockCopy(packed, 0, plain, 0, length);
@@ -131,13 +224,24 @@ namespace DIYLevelFastInit.BundleCodecs
 
         internal static ConversionResult Convert(string source, string destination, Func<bool> cancelled, Action checkpoint)
         {
+            return Convert(source, destination, cancelled, checkpoint, null);
+        }
+
+        internal static ConversionResult Convert(string source, string destination, Func<bool> cancelled, Action checkpoint, BundleWorkScheduler scheduler)
+        {
+            return Convert(source, destination, cancelled, checkpoint, scheduler, null);
+        }
+
+        internal static ConversionResult Convert(string source, string destination, Func<bool> cancelled, Action checkpoint, BundleWorkScheduler scheduler, WorkPlan plan)
+        {
             if (string.Equals(Path.GetFullPath(source), Path.GetFullPath(destination), StringComparison.OrdinalIgnoreCase))
                 throw new IOException("The source bundle cannot be a conversion destination");
             Check(cancelled, checkpoint);
             using (FileStream input = OpenSource(source))
             {
+                CheckPlan(source, plan);
                 Layout layout = ReadLayout(input);
-                int count = checked((int)(((long)layout.Plain + ChunkSize - 1) / ChunkSize));
+                int count = checked((int)((layout.DataLength + ChunkSize - 1) / ChunkSize));
                 int metadataSize = 16 + 4 + count * 10 + 4;
                 foreach (Node node in layout.Nodes) metadataSize = checked(metadataSize + 21 + node.Name.Length);
                 if (metadataSize > MaxMetadata) throw new IOException("Converted UnityFS metadata is too large");
@@ -147,23 +251,22 @@ namespace DIYLevelFastInit.BundleCodecs
                     WriteHeader(output, layout, 0, metadataSize);
                     long metadataStart = output.Position;
                     long bodyStart = metadataStart + metadataSize;
-                    if (bodyStart + layout.Plain > MaxBytes) throw new IOException("Converted bundle exceeds the output limit");
+                    if (bodyStart + layout.DataLength > MaxBytes) throw new IOException("Converted bundle exceeds the output limit");
                     output.SetLength(bodyStart);
                     output.Position = bodyStart;
-                    input.Position = layout.DataStart + 5;
                     byte[] dataHash;
                     List<Block> blocks;
                     using (SHA256 hash = SHA256.Create())
                     {
-                        ChunkOutput sink = new ChunkOutput(output, layout.Plain, hash, cancelled, checkpoint);
-                        Compression.LZMA.Decoder decoder = new Compression.LZMA.Decoder();
-                        decoder.SetDecoderProperties(layout.Properties);
-                        using (LimitedInput limited = new LimitedInput(input, layout.Packed - 5, cancelled, checkpoint))
-                            decoder.Code(limited, sink, layout.Packed - 5, layout.Plain, null);
-                        sink.Finish();
-                        hash.TransformFinalBlock(new byte[0], 0, 0);
-                        dataHash = hash.Hash;
-                        blocks = sink.Blocks;
+                        bool parallel = scheduler != null && (plan == null ? layout.DataLength > ChunkSize : plan.Parallel);
+                        using (ChunkOutput sink = new ChunkOutput(output, layout.DataLength, hash, cancelled, checkpoint, parallel ? scheduler : null))
+                        {
+                            DecodeSource(input, layout, sink, cancelled, checkpoint);
+                            sink.Finish();
+                            hash.TransformFinalBlock(new byte[0], 0, 0);
+                            dataHash = hash.Hash;
+                            blocks = sink.Blocks;
+                        }
                     }
                     if (blocks.Count != count) throw new IOException("Converted UnityFS block count changed");
                     long length = output.Position;
@@ -175,7 +278,7 @@ namespace DIYLevelFastInit.BundleCodecs
                     output.Flush();
                     return new ConversionResult
                     {
-                        SourceLength = layout.SourceLength, DataLength = layout.Plain, OutputLength = length, BlockCount = count,
+                        SourceLength = layout.SourceLength, DataLength = layout.DataLength, OutputLength = length, BlockCount = count,
                         SourceHash = HashStream(input, layout.SourceLength, cancelled, checkpoint), DataHash = dataHash,
                         OutputHash = HashStream(output, length, cancelled, checkpoint)
                     };
@@ -191,17 +294,70 @@ namespace DIYLevelFastInit.BundleCodecs
         private static Layout ReadLayout(FileStream stream)
         {
             Layout result = ReadContainerLayout(stream);
-            if (result.Blocks.Count != 1) throw new IOException("Only single-block source bundles are eligible");
-            Block block = result.Blocks[0];
-            result.Plain = block.Plain;
-            result.Packed = block.Packed;
-            result.BlockFlags = block.Flags;
-            if ((result.BlockFlags & ~127) != 0 || (result.BlockFlags & 63) != 1 || result.Packed < 10)
-                throw new IOException("Unsupported UnityFS source block");
-            stream.Position = result.DataStart;
-            result.Properties = Exact(stream, 5);
-            ValidateProperties(result.Properties);
+            if (result.Blocks.Count == 1 && (result.Blocks[0].Flags & 63) == 1)
+            {
+                Block block = result.Blocks[0];
+                result.Plain = block.Plain;
+                result.Packed = block.Packed;
+                result.BlockFlags = block.Flags;
+                if ((block.Flags & ~127) != 0 || result.Packed < 10) throw new IOException("Unsupported UnityFS LZMA block");
+                stream.Position = result.DataStart;
+                result.Properties = Exact(stream, 5);
+                ValidateProperties(result.Properties);
+            }
+            else foreach (Block block in result.Blocks)
+            {
+                int compression = block.Flags & 63;
+                if ((block.Flags & ~127) != 0 || (compression != 0 && compression != 2 && compression != 3)
+                    || block.Plain > MaxMetadata || (compression == 0 && block.Packed != block.Plain)
+                    || block.Packed > (long)block.Plain + block.Plain / 255 + 16)
+                    throw new IOException("Unsupported UnityFS LZ4/raw source block");
+            }
             return result;
+        }
+
+        private static void DecodeSource(FileStream input, Layout layout, Stream output, Func<bool> cancelled, Action checkpoint)
+        {
+            if (layout.Properties != null)
+            {
+                input.Position = layout.DataStart + 5;
+                Compression.LZMA.Decoder decoder = new Compression.LZMA.Decoder();
+                decoder.SetDecoderProperties(layout.Properties);
+                using (LimitedInput limited = new LimitedInput(input, layout.Packed - 5, cancelled, checkpoint))
+                    decoder.Code(limited, output, layout.Packed - 5, layout.Plain, null);
+                return;
+            }
+            int maxPacked = CheckSize, maxPlain = 0;
+            foreach (Block block in layout.Blocks)
+            {
+                if ((block.Flags & 63) == 0) continue;
+                maxPacked = Math.Max(maxPacked, (int)block.Packed);
+                maxPlain = Math.Max(maxPlain, (int)block.Plain);
+            }
+            byte[] packed = new byte[maxPacked], plain = new byte[maxPlain];
+            input.Position = layout.DataStart;
+            foreach (Block block in layout.Blocks)
+            {
+                Check(cancelled, checkpoint);
+                if ((block.Flags & 63) == 0)
+                {
+                    int remaining = (int)block.Plain;
+                    while (remaining > 0)
+                    {
+                        Check(cancelled, checkpoint);
+                        int count = Math.Min(remaining, packed.Length);
+                        ReadExact(input, packed, count);
+                        output.Write(packed, 0, count);
+                        remaining -= count;
+                    }
+                }
+                else
+                {
+                    ReadExact(input, packed, (int)block.Packed);
+                    DecodeLz4(packed, (int)block.Packed, plain, (int)block.Plain, false);
+                    output.Write(plain, 0, (int)block.Plain);
+                }
+            }
         }
 
         private static Layout ReadIndependentLayout(FileStream stream)
@@ -235,7 +391,15 @@ namespace DIYLevelFastInit.BundleCodecs
             result.DataStart = atEnd ? headerEnd : headerEnd + packed;
             if (metadataStart < headerEnd || metadataStart > stream.Length - packed) throw new IOException("Invalid UnityFS metadata extent");
             stream.Position = metadataStart;
-            byte[] metadata = DecodeMetadata(Exact(stream, packed), plain, (int)(result.Flags & 63));
+            byte[] packedMetadata = Exact(stream, packed);
+            result.MetadataMemory = packed + plain * 2L;
+            if ((result.Flags & 63) == 1 && packedMetadata.Length >= 5)
+            {
+                byte[] properties = new byte[5]; Buffer.BlockCopy(packedMetadata, 0, properties, 0, 5);
+                ValidateProperties(properties);
+                result.MetadataMemory += LzmaMemory(properties);
+            }
+            byte[] metadata = DecodeMetadata(packedMetadata, plain, (int)(result.Flags & 63));
             using (MemoryStream table = new MemoryStream(metadata, false))
             {
                 result.Hash = Exact(table, 16);
@@ -459,22 +623,36 @@ namespace DIYLevelFastInit.BundleCodecs
 
         private sealed class ChunkOutput : ForwardStream
         {
+            private sealed class PendingBlock
+            {
+                internal BundleWorkScheduler.Job Job;
+                internal byte[] Plain, Packed;
+                internal int Length, PackedLength;
+            }
+
             private readonly Stream _output;
             private readonly long _limit;
             private readonly SHA256 _hash;
             private readonly Func<bool> _cancelled;
             private readonly Action _checkpoint;
             private readonly byte[] _plain = new byte[ChunkSize], _packed = new byte[ChunkSize + ChunkSize / 255 + 16];
-            private readonly Lz4BlockEncoder _encoder = new Lz4BlockEncoder();
+            private readonly Lz4BlockEncoder _encoder;
+            private readonly BundleWorkScheduler _scheduler;
+            private readonly Queue<PendingBlock> _pending = new Queue<PendingBlock>();
+            private readonly Queue<PendingBlock> _available = new Queue<PendingBlock>();
             private long _written;
             private int _filled;
             internal readonly List<Block> Blocks = new List<Block>();
-            internal ChunkOutput(Stream output, long limit, SHA256 hash, Func<bool> cancelled, Action checkpoint)
-            { _output = output; _limit = limit; _hash = hash; _cancelled = cancelled; _checkpoint = checkpoint; }
+            internal ChunkOutput(Stream output, long limit, SHA256 hash, Func<bool> cancelled, Action checkpoint, BundleWorkScheduler scheduler)
+            {
+                _output = output; _limit = limit; _hash = hash; _cancelled = cancelled; _checkpoint = checkpoint;
+                _scheduler = scheduler;
+                if (scheduler == null) _encoder = new Lz4BlockEncoder();
+            }
             public override bool CanWrite { get { return true; } }
             public override void Write(byte[] buffer, int offset, int count)
             {
-                if (count > _limit - _written) throw new IOException("LZMA output exceeds the declared length");
+                if (count > _limit - _written) throw new IOException("Decoded output exceeds the declared length");
                 while (count != 0)
                 {
                     Check(_cancelled, _checkpoint);
@@ -487,20 +665,61 @@ namespace DIYLevelFastInit.BundleCodecs
             }
             internal void Finish()
             {
-                if (_written != _limit) throw new IOException("Truncated LZMA output");
+                if (_written != _limit) throw new IOException("Truncated decoded output");
                 if (_filled != 0) FlushBlock();
+                while (_pending.Count != 0) WritePending();
             }
             private void FlushBlock()
             {
                 Check(_cancelled, _checkpoint);
+                if (_scheduler != null)
+                {
+                    PendingBlock block = _available.Count != 0 ? _available.Dequeue() : new PendingBlock
+                        { Plain = new byte[ChunkSize], Packed = new byte[ChunkSize + ChunkSize / 255 + 16] };
+                    block.Length = _filled;
+                    Buffer.BlockCopy(_plain, 0, block.Plain, 0, _filled);
+                    block.Job = _scheduler.QueueBlock(delegate
+                    {
+                        Check(_cancelled, null);
+                        block.PackedLength = _scheduler.Encode(block.Plain, block.Length, block.Packed);
+                    });
+                    _pending.Enqueue(block);
+                    _filled = 0;
+                    if (_pending.Count >= _scheduler.WorkerCount * 2) WritePending();
+                    return;
+                }
                 int packed = _encoder.Encode(_plain, _filled, _packed);
-                bool compressed = packed < _filled;
-                int length = compressed ? packed : _filled;
-                if (_output.Position > MaxBytes - length) throw new IOException("Converted bundle exceeds the output limit");
-                _output.Write(compressed ? _packed : _plain, 0, length);
-                Blocks.Add(new Block { Plain = (uint)_filled, Packed = (uint)length, Flags = (ushort)(compressed ? 2 : 0) });
+                if (_output.Position > MaxBytes - packed) throw new IOException("Converted bundle exceeds the output limit");
+                _output.Write(_packed, 0, packed);
+                Blocks.Add(new Block { Plain = (uint)_filled, Packed = (uint)packed, Flags = 3 });
                 _filled = 0;
                 Check(_cancelled, _checkpoint);
+            }
+
+            private void WritePending()
+            {
+                PendingBlock block = _pending.Peek();
+                _scheduler.Wait(block.Job, _cancelled);
+                Check(_cancelled, _checkpoint);
+                if (_output.Position > MaxBytes - block.PackedLength) throw new IOException("Converted bundle exceeds the output limit");
+                _output.Write(block.Packed, 0, block.PackedLength);
+                Blocks.Add(new Block { Plain = (uint)block.Length, Packed = (uint)block.PackedLength, Flags = 3 });
+                _pending.Dequeue();
+                block.Job = null;
+                _available.Enqueue(block);
+            }
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing && _scheduler != null)
+                    while (_pending.Count != 0)
+                    {
+                        PendingBlock block = _pending.Dequeue();
+                        try { _scheduler.Wait(block.Job, null); }
+                        catch (Exception) { }
+                    }
+                _available.Clear();
+                base.Dispose(disposing);
             }
         }
 
