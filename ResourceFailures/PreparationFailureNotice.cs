@@ -15,8 +15,8 @@ namespace DIYLevelFastInit.ResourceFailures
     //
     // The parsed failure queues here and the native dialog is shown on the main thread from the plugin tick. Queued
     // notices are kept until the dialog is actually shown (a startup warm-scan failure fires long before the
-    // frontend exists), deduplicated per scene per session, and capped so a run of broken packages cannot flood the
-    // player. While the FailureGate popup is active the notices wait; the serialized queue is resumed afterwards.
+    // frontend exists), deduplicated within a load attempt, and bounded while queued. A new explicit attempt can
+    // report the same scene again. While the FailureGate popup is active the notices wait.
     internal static class PreparationFailureNotice
     {
         // FastInitHost.Guard catch: "DIY level preparation [scene] failed: reason"
@@ -25,11 +25,11 @@ namespace DIYLevelFastInit.ResourceFailures
         // LoadPrefix catch: "DIY level preparation failed [scene]: reason"
         private const string FailedFirstTrigger = "DIY level preparation failed [";
         private const string FailedFirstMarker = "]:";
-        private const int MaxPopups = 5;
+        private const int MaxPendingNotices = 5;
         private const int MaxReasonLength = 220;
 
         private static readonly object Gate = new object();
-        private static readonly HashSet<string> reported = new HashSet<string>(StringComparer.Ordinal);
+        private static readonly HashSet<string> reported = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private static readonly List<string[]> pending = new List<string[]>();
         private static T17DialogBox activeDialog;
         private static int shown;
@@ -46,6 +46,16 @@ namespace DIYLevelFastInit.ResourceFailures
 
         internal static int ShownCount { get { return shown; } }
 
+        internal static void BeginAttempt(string scene)
+        {
+            lock (Gate)
+            {
+                reported.Remove(scene);
+                for (int i = pending.Count - 1; i >= 0; i--)
+                    if (string.Equals(pending[i][0], scene, StringComparison.OrdinalIgnoreCase)) pending.RemoveAt(i);
+            }
+        }
+
         // Called from any thread by PreparationLogListener with the raw log text.
         internal static void Observe(LogLevel level, string sourceName, string message)
         {
@@ -61,6 +71,7 @@ namespace DIYLevelFastInit.ResourceFailures
             if (failure != null && string.Equals(failure.SceneName, scene, StringComparison.OrdinalIgnoreCase)) return;
             lock (Gate)
             {
+                if (pending.Count >= MaxPendingNotices) return;
                 if (!reported.Add(scene)) return;
                 pending.Add(new string[] { scene, reason });
             }
@@ -126,13 +137,6 @@ namespace DIYLevelFastInit.ResourceFailures
                     if (pending.Count > 0) next = pending[0];
                 }
                 if (next == null) return;
-                if (shown >= MaxPopups)
-                {
-                    lock (Gate) { pending.RemoveAt(0); }
-                    BlockerLog.Warning("Preparation", "CAPPED", "preparation-failure popup cap reached ("
-                        + MaxPopups + "); logging only: scene=" + next[0] + " reason=" + next[1]);
-                    return;
-                }
                 Show(next);
             }
             catch (Exception ex) { BlockerLog.Error("Preparation", "TICK_FAILED", ex.ToString()); }

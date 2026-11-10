@@ -10,6 +10,8 @@
 
 同一 DLL 兼容 OC2DIYLevel 0.10.0 和 0.11.0，按资源描述符签名选择 0.11 新增重载中的正确入口。类型化资源加载改为在非泛型调用点观察，保留实际的 `LoadAsset<T>` 类型参数；不再对闭合泛型加载器打 Harmony 补丁，避免游戏 Mono 共享泛型代码造成类型混淆。
 
+错误提示只在同一次加载尝试内去重；再次选择同一关卡仍然失败时会重新提示。待显示队列最多保留 5 条，不限制整次游戏运行的弹窗总数。
+
 安装测试前，请从 `BepInEx/plugins` 移出独立的 ResourceReadFailureBlocker DLL（包括 `OC2DIYLevel-ResourceReadFailureBlocker-选档空白修复.dll`），并重启游戏。旧插件保留时仍会安装自己的补丁，FastInit 会记录冲突提示。只替换 FastInit DLL 即可，不需要改动 OC2DIYLevel DLL。错误框支持简体／繁体中文、英语、日语、韩语，其余游戏语言回退英语；详细日志位于 `BepInEx/logs/oc2.diylevel.fastinit.resource-failures/`，最多保留 20 份会话日志。
 
 这项处理用于识别并停止失败的资源加载，不会修复地图内容或 OC2DIYLevel 的物件实现。当前离线检查覆盖两个版本的补丁安装、类型参数、异常传播与入口阻断；原生界面、young 关卡和联机表现仍需实际游戏测试。

@@ -337,6 +337,10 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   tree before testing this integration. Warn about its GUID; do not silently modify
   another installed plugin. Preserve original exceptions/logs, coalesce duplicate
   notices, and keep the source author's credit in `THIRD_PARTY_NOTICES.md`.
+- Preparation notices deduplicate within a load attempt, not for the whole session.
+  Begin a fresh notice attempt only when a server, direct client or queued client
+  preparation starts; ignored duplicate requests must not reset it. Bound the pending
+  queue, never the session's total shown count, so repeated failed selections remain visible.
 - Offline checks generate native-boundary Harmony wrappers on desktop CLR and use
   the actual x86 game Mono for resource calls with asset I/O stubbed. Neither verifies
   native UI, object setup, young gameplay or multiplayer; report those limits plainly.

@@ -10,6 +10,8 @@ Integrates the ResourceReadFailureBlocker source provided by Github@CH3NGY2 into
 
 The same DLL supports OC2DIYLevel 0.10.0 and 0.11.0, selecting resource-descriptor overloads explicitly on 0.11. Typed resource loads are observed at non-generic call sites while preserving the original `LoadAsset<T>` type argument. Closed generic loader bodies receive no Harmony patches, avoiding type confusion in the game's shared Mono generic code.
 
+Notices coalesce repeated errors within one load attempt. Selecting the same level again can show its new failure. At most five notices wait in the queue; there is no session-wide limit on how many errors can be shown.
+
 Before testing, move the standalone ResourceReadFailureBlocker DLL out of `BepInEx/plugins` (including `OC2DIYLevel-ResourceReadFailureBlocker-选档空白修复.dll`) and restart the game. The old plugin would still install its own patches; FastInit logs a warning if it is present. Replace only the FastInit DLL; no OC2DIYLevel DLL changes are needed. Dialogs support Simplified/Traditional Chinese, English, Japanese and Korean, with English fallback for other game languages. Detailed session logs are under `BepInEx/logs/oc2.diylevel.fastinit.resource-failures/`, retaining at most 20 files.
 
 This handles failed resource reads; it does not repair map content or OC2DIYLevel object implementations. Offline checks cover both versions' patch installation, type arguments, exception propagation and entry gates. Native UI, young levels and multiplayer behavior still require gameplay testing.

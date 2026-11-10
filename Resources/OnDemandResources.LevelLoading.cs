@@ -63,6 +63,7 @@ namespace DIYLevelFastInit
             if (ResourceFailures.FailureGate.Active) return false;
             if (FastInitPlugin.InfoFilesPreparing) throw new InvalidOperationException("DIY info bundles are being prepared; wait for startup to finish");
             if (FastInitPlugin.Syncing) throw new InvalidOperationException("DIY catalog refresh is in progress; retry after it completes");
+            ResourceFailures.PreparationFailureNotice.BeginAttempt(sceneName);
             try { PrepareLevel(sceneName); }
             catch (Exception e)
             {
@@ -87,6 +88,7 @@ namespace DIYLevelFastInit
                 return false;
             }
             if (FastInitPlugin.Instance == null) return LoadPrefix(sceneName);
+            ResourceFailures.PreparationFailureNotice.BeginAttempt(sceneName);
             string path = FindScenePath(sceneName);
             ServerPreparation request = new ServerPreparation(++_serverPreparationGeneration);
             ClientLoadGate.Cancel("server level entry");
@@ -154,6 +156,7 @@ namespace DIYLevelFastInit
 
         internal static void BeginClientPreparation(string scene)
         {
+            ResourceFailures.PreparationFailureNotice.BeginAttempt(scene);
             _pendingScene = scene;
             CancelPreview();
             LevelLoadProgress = "client ...";
