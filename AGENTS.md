@@ -2,7 +2,7 @@
 
 BepInEx 5 plugin (net35) that patches
 [OC2DIYLevel](https://github.com/gua248/Overcooked2-LevelEditor) 0.10.0 and 0.11.0 for Overcooked! 2.
-Version 1.9.0 keeps a complete lightweight level catalog while loading info resources
+Version 1.9.1 keeps a complete lightweight level catalog while loading info resources
 and building configurations only for the selected level. Async discovery, menu healing,
 the progress indicator, and incremental hot reload remain supported.
 
@@ -447,6 +447,11 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 - Existing all-HC (`0x03`) layouts skip conversion after bounded structural checks.
   Do not rewrite their timestamps each startup. File-length/mtime fingerprints must
   invalidate catalog, graph and thumbnail data naturally when replacement occurs.
+- If no work directory exists, classify HC/unsupported inputs without creating it
+  or lock files. Verify the HC source stamp before publishing its readiness receipt.
+  Existing recovery directories still require locked cleanup; actual conversions
+  still recheck under the replacement guard. Never restore a parent timestamp to
+  hide changes: unchanged checks must avoid directory mutations in the first place.
 - `BundleFileCache` remains legacy managed code for historical compatibility checks;
   production no longer Configure/Queue/Acquire/Tick it or select its physical paths.
   Old bundle-cache options are ignored. Scalar catalog/thumbnail caches are separate.

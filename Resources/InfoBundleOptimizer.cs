@@ -46,7 +46,26 @@ namespace DIYLevelFastInit
             {
                 source = SourcePath(source);
                 CheckCancelled(cancelled);
-                string directory = WorkDirectory(source);
+                string directory = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(source), ".diylevel-fastinit");
+                if (!Directory.Exists(directory))
+                {
+                    UnityFsRepacker.CheckPlan(source, plan);
+                    FileInfo initial = new FileInfo(source);
+                    long length = initial.Length, ticks = initial.LastWriteTimeUtc.Ticks;
+                    if (UnityFsRepacker.IsHighCompression(source))
+                    {
+                        VerifyStampExclusive(source, length, ticks);
+                        preparedLength = length; preparedModified = ticks;
+                        Log(log, "level bundle already optimized: " + System.IO.Path.GetFileName(source));
+                        return Result.AlreadyOptimized;
+                    }
+                    if (!UnityFsRepacker.IsEligible(source))
+                    {
+                        Log(log, "level bundle source layout unsupported or unavailable; original retained: " + source);
+                        return Result.Unsupported;
+                    }
+                }
+                Directory.CreateDirectory(directory);
                 using (IDisposable guard = Lock(directory, source))
                 {
                     UnityFsRepacker.CheckPlan(source, plan);
@@ -263,13 +282,6 @@ namespace DIYLevelFastInit
                 Log(log, "original cleanup failed; verified replacement and remaining recovery files retained: " + source + "\n" + error);
                 return false;
             }
-        }
-
-        private static string WorkDirectory(string source)
-        {
-            string directory = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(source), ".diylevel-fastinit");
-            Directory.CreateDirectory(directory);
-            return directory;
         }
 
         internal static void CleanupWorkDirectory(string parent, Action<string> log)

@@ -20,7 +20,7 @@ namespace DIYLevelFastInit
     {
         public const string PluginGuid = "oc2.diylevel.fastinit";
         public const string PluginName = "DIYLevel 快速载入 / DIYLevel 启动速度优化 / DIYLevel FastInit";
-        public const string PluginVersion = "1.9.0";
+        public const string PluginVersion = "1.9.1";
 
         internal static ManualLogSource Log;
 
