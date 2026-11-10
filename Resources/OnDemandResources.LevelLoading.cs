@@ -45,7 +45,7 @@ namespace DIYLevelFastInit
 
             internal bool IsCurrent(string scene)
             {
-                return FastInitPlugin.Instance != null && _serverPreparing && _generation == _serverPreparationGeneration
+                return !ResourceFailures.FailureGate.Active && FastInitPlugin.Instance != null && _serverPreparing && _generation == _serverPreparationGeneration
                     && string.Equals(_pendingScene, scene, StringComparison.OrdinalIgnoreCase)
                     && ConnectionStatusPublicizer.IsInSession() == _online && ConnectionStatusPublicizer.IsHost() == _host
                     && (!_online || _host)
@@ -58,8 +58,9 @@ namespace DIYLevelFastInit
             }
         }
 
-        private static void LoadPrefix(string sceneName)
+        private static bool LoadPrefix(string sceneName)
         {
+            if (ResourceFailures.FailureGate.Active) return false;
             if (FastInitPlugin.InfoFilesPreparing) throw new InvalidOperationException("DIY info bundles are being prepared; wait for startup to finish");
             if (FastInitPlugin.Syncing) throw new InvalidOperationException("DIY catalog refresh is in progress; retry after it completes");
             try { PrepareLevel(sceneName); }
@@ -71,10 +72,12 @@ namespace DIYLevelFastInit
                 ReleaseUnused();
                 throw;
             }
+            return true;
         }
 
         private static bool ServerLoadPrefix(string sceneName)
         {
+            if (ResourceFailures.FailureGate.Active) return false;
             if (_resumeServerLoad) return true;
             if (FastInitPlugin.InfoFilesPreparing) return false;
             if (FastInitPlugin.Syncing) throw new InvalidOperationException("DIY catalog refresh is in progress; retry after it completes");
@@ -83,7 +86,7 @@ namespace DIYLevelFastInit
                 FastInitPlugin.Log.LogDebug("DIY level preparation already pending; ignoring duplicate load: " + sceneName);
                 return false;
             }
-            if (FastInitPlugin.Instance == null) { LoadPrefix(sceneName); return true; }
+            if (FastInitPlugin.Instance == null) return LoadPrefix(sceneName);
             string path = FindScenePath(sceneName);
             ServerPreparation request = new ServerPreparation(++_serverPreparationGeneration);
             ClientLoadGate.Cancel("server level entry");

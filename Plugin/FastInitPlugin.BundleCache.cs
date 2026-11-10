@@ -81,6 +81,7 @@ namespace DIYLevelFastInit
 
         private void Update()
         {
+            if (_resourceFailureBlocker != null) _resourceFailureBlocker.Tick();
             InfoBundleOptimizationBatch batch = _infoOptimization;
             if (!_patchesReady || batch == null) return;
             UpdateInfoOptimization(batch);

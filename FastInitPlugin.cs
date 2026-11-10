@@ -55,6 +55,7 @@ namespace DIYLevelFastInit
         internal static string InfoOptimizationProgress;
         internal static bool UseDirectCatalogReader = true;
         private static CatalogMetadataRequest _catalogRead;
+        private ResourceFailures.ResourceFailureBlocker _resourceFailureBlocker;
 
         private void Awake()
         {
@@ -87,6 +88,7 @@ namespace DIYLevelFastInit
                 OnDemandResources.Install(harmony);
                 _patchesReady = true;
                 ConfigureBundleCache();
+                _resourceFailureBlocker = ResourceFailures.ResourceFailureBlocker.Create();
                 Log.LogInfo("DIYLevel FastInit ready: lightweight catalog, on-demand level resources.");
             }
             catch (Exception e)
@@ -105,6 +107,7 @@ namespace DIYLevelFastInit
 
         private void OnDestroy()
         {
+            if (_resourceFailureBlocker != null) _resourceFailureBlocker.Dispose();
             if (_infoOptimization != null) _infoOptimization.Dispose();
             if (_catalogRead != null) _catalogRead.Dispose();
             OnDemandResources.ResetSaveSelection();

@@ -16,6 +16,8 @@ the progress indicator, and incremental hot reload remain supported.
 - `Networking/`: copied client load requests and the remote entry gate.
 - `Resources/`: shared state/hook registration, info bundles, level preparation,
   configuration ownership, lifetime cleanup, Qichi and info dependency adapters.
+- `ResourceFailures/`: integrated, attributed ResourceReadFailureBlocker observers,
+  failure gates, native dialogs, localization and diagnostics.
 - `Previews/`: preview requests, thumbnail warmup and the persistent thumbnail cache.
 - `Diagnostics/`: material auditing.
 - `Infrastructure/`: coroutine host, async request helpers and result boxes.
@@ -311,6 +313,33 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   its decompiled source at `C:\Users\yang\.cache\OC2DIYLevel-decompiled\OC2DIYLevel_src\`.
 
 ## Selected level assets
+
+- `ResourceFailureBlocker` has its own Harmony owner but no second plugin/tick host.
+  Create it after FastInit's core hooks, tick it before Update's optimization early
+  return, and dispose its listener, assembly event and hooks on shutdown. Preserve
+  the author's deferred DIY observer installation window at `MetaGameProgress.ByteLoad`.
+  Assembly-load callbacks only queue work; native UI and patch installation run on
+  the main thread. The game boundary is limited to the validated Assembly-CSharp MVID.
+- Never patch closed generic `PseudoPrefabManager.LoadAsset<T>` bodies. This Mono
+  shares reference-type instantiations and such hooks can lose the actual type
+  argument, returning the wrong Unity object and causing a native crash. Instead,
+  `ResourceAssetObserver` rewrites matching calls in non-generic DIY methods to an
+  ordinary, unpatched generic forwarding method. Preserve each original type argument
+  and exception. Both real DIY assemblies must pass the game-Mono typed-load probe.
+- Resolve `RecipeHelper` consumers by their `PseudoPrefabSO` parameter; 0.11 also has
+  GameObject overloads. Only failures of required resource consumers activate the
+  failure gate; tolerated nulls and unrelated exceptions must remain unblocked.
+  Keep direct guards in FastInit initialization, selection, client messages and
+  server/client preparation, since Harmony prefix order alone cannot stop another
+  prefix from starting work. Cancel failed preparation before closing the old UI;
+  reset the gate only for the current confirmed error after the old save UI closes.
+- Standalone ResourceReadFailureBlocker must be removed from the game's plugin scan
+  tree before testing this integration. Warn about its GUID; do not silently modify
+  another installed plugin. Preserve original exceptions/logs, coalesce duplicate
+  notices, and keep the source author's credit in `THIRD_PARTY_NOTICES.md`.
+- Offline checks generate native-boundary Harmony wrappers on desktop CLR and use
+  the actual x86 game Mono for resource calls with asset I/O stubbed. Neither verifies
+  native UI, object setup, young gameplay or multiplayer; report those limits plainly.
 
 - `InstallRecipeHooks` detects the optional-recipe factory in the target assembly.
   OC2DIYLevel 0.10 uses `RecipeHelper.GetOrderDefinitionNodeCustomRecipeOptional`;

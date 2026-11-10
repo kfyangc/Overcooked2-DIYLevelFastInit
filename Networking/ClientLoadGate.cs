@@ -64,6 +64,7 @@ namespace DIYLevelFastInit
                 Cancel("another scene requested");
                 return true;
             }
+            if (ResourceFailures.FailureGate.Active) return false;
             if (FastInitPlugin.Instance == null) return true;
             Client peer = _mailboxPeer.GetValue(__instance) as Client;
             NetworkConnection connection = peer == null ? null : ServerConnection.GetValue(peer) as NetworkConnection;
@@ -86,7 +87,7 @@ namespace DIYLevelFastInit
 
         private static bool IsCurrent(ClientLoadQueue.Request request)
         {
-            return Queue.IsCurrent(request) && IsIdentityCurrent(request);
+            return !ResourceFailures.FailureGate.Active && Queue.IsCurrent(request) && IsIdentityCurrent(request);
         }
 
         private static bool IsIdentityCurrent(ClientLoadQueue.Request request)

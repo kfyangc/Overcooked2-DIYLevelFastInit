@@ -4,6 +4,16 @@ Startup and memory optimization for the [OC2DIYLevel](https://github.com/gua248/
 
 [中文说明](README_CN.md)
 
+## Resource read failure handling
+
+Integrates the ResourceReadFailureBlocker source provided by Github@CH3NGY2 into FastInit's lifecycle and main-thread update. A required template or recipe resource failure that breaks configuration building stops the failed DIY entry/save-ready flow, cancels pending FastInit preparation, closes its failed save dialog and shows the level, resource and exception in a native game error dialog. Confirming the error permits a new selection once the old save dialog has closed. Tolerated optional null assets do not activate the gate; original exceptions and logs remain intact. FastInit preparation errors also produce queued notices, coalescing duplicate reports for the same level.
+
+The same DLL supports OC2DIYLevel 0.10.0 and 0.11.0, selecting resource-descriptor overloads explicitly on 0.11. Typed resource loads are observed at non-generic call sites while preserving the original `LoadAsset<T>` type argument. Closed generic loader bodies receive no Harmony patches, avoiding type confusion in the game's shared Mono generic code.
+
+Before testing, move the standalone ResourceReadFailureBlocker DLL out of `BepInEx/plugins` (including `OC2DIYLevel-ResourceReadFailureBlocker-选档空白修复.dll`) and restart the game. The old plugin would still install its own patches; FastInit logs a warning if it is present. Replace only the FastInit DLL; no OC2DIYLevel DLL changes are needed. Dialogs support Simplified/Traditional Chinese, English, Japanese and Korean, with English fallback for other game languages. Detailed session logs are under `BepInEx/logs/oc2.diylevel.fastinit.resource-failures/`, retaining at most 20 files.
+
+This handles failed resource reads; it does not repair map content or OC2DIYLevel object implementations. Offline checks cover both versions' patch installation, type arguments, exception propagation and entry gates. Native UI, young levels and multiplayer behavior still require gameplay testing.
+
 ## Version 1.8.0
 
 One DLL supports both OC2DIYLevel 0.10.0 and 0.11.0: the legacy optional-recipe factory hook is kept on 0.10, while 0.11 — where the old factory was removed — detects and hooks `CustomRecipeOptionalRegister.GetOrderDefinitionNode`. Custom recipe nodes, both lookup factories and cloned prefabs remain tracked; results shared across entry points are deduplicated by the existing ownership sets, and the selected optional-recipe target is logged at startup. The plugin display name is now localized.
