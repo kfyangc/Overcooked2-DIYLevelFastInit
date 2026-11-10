@@ -333,13 +333,14 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   uncached preview scene. Keep container/CAB dependencies and cache-file leases until
   their last active, pending, preview or warmup owner has finished.
 
-## Startup info bundle optimization
+## Source info and scene bundle optimization
 
-- The owner authorized replacing `info*` files in 1.6.18. `InfoBundleOptimizer`
-  converts supported single-block LZMA inputs and atomically replaces their original
+- The owner authorized replacing `info*` and scene `s_*` files. `InfoBundleOptimizer`
+  converts supported single-block LZMA and bounded single/multi-block LZ4/raw inputs to
+  LZ4HC, including ordinary independent LZ4 produced by older versions, and atomically replaces their original
   paths only after `ValidateConverted` checks output/source file hashes, complete
   decoded-data hash, block bounds and equivalent versions/CAB/node metadata.
-- Generated independent blocks use flags `0x02`/`0x00`, never the source's Streamed
+- Generated independent blocks use HC compression flag `0x03`, never the source's Streamed
   bit `0x40`; the installed Unity's LZ4 stream callbacks fail. A generic parser or
   successful managed conversion does not establish full native Unity acceptance.
 - `InfoBundleOptimizationBatch` owns one cancellable managed worker. Its callbacks
@@ -359,19 +360,27 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 - Use the installed Mono's supported atomic File.Replace with a unique backup. There
   is no truncate/copy-over-source fallback. Recheck source identity/hash under an
   exclusive handle before commit; verify the captured backup and new source afterward.
-  Commit and rollback are non-cancellable critical sections retaining both versions.
+  Commit, rollback and successful-original disposal are non-cancellable critical sections.
+  Once both hashes verify, delete the captured original and recovery record. Already
+  independent sources may discard historical originals only when both output/source
+  hashes match their records. Invalid or unrelated recovery files must remain.
   Unsupported, locked and failed inputs retain usable originals; clean only owned temps.
 - Restore mode takes precedence over optimization, only replaces a source matching the
   recorded optimized hash, validates the original backup, and preserves the displaced
-  optimized copy. Never restore over a later map update or corrupt recovery record.
-- Existing independent LZ4/raw layouts skip conversion after bounded structural checks.
+  optimized copy. It covers surviving historical backups only; successful new conversions
+  retain no restorable original. Never restore over a later map update or corrupt record.
+- Existing all-HC (`0x03`) layouts skip conversion after bounded structural checks.
   Do not rewrite their timestamps each startup. File-length/mtime fingerprints must
   invalidate catalog, graph and thumbnail data naturally when replacement occurs.
 - `BundleFileCache` remains legacy managed code for historical compatibility checks;
   production no longer Configure/Queue/Acquire/Tick it or select its physical paths.
   Old bundle-cache options are ignored. Scalar catalog/thumbnail caches are separate.
 - `UnityFsRepacker` streams 128 KiB output blocks with bounded buffers and the original
-  LZMA dictionary. Never retain the entire resource payload or clamp its dictionary.
+  LZMA dictionary. LZ4/raw input blocks have an 8 MiB limit and are decoded one at a time;
+  multiple LZMA blocks remain unsupported. The HC encoder uses a 64 KiB hash-chain window,
+  up to 256 candidate probes and lazy matching. Encode all output blocks as HC, including
+  incompressible blocks, to keep all-HC detection idempotent without external receipts.
+  Never retain the entire resource payload or clamp the LZMA dictionary.
 
 ## Constraints
 

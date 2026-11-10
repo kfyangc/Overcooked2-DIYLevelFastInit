@@ -7,7 +7,7 @@ using DIYLevelFastInit.BundleCodecs;
 
 namespace DIYLevelFastInit
 {
-    /// <summary>Replaces one info bundle with a verified independent bundle while retaining its original.</summary>
+    /// <summary>Replaces info and scene bundles atomically, discarding originals only after verification.</summary>
     internal static class InfoBundleOptimizer
     {
         internal enum Result { Replaced, AlreadyOptimized, Unsupported, Failed, Restored, NoBackup }
@@ -24,6 +24,13 @@ namespace DIYLevelFastInit
 
         internal static Result Optimize(string source, Func<bool> cancelled, Action<string> log)
         {
+            long preparedLength, preparedModified;
+            return Optimize(source, cancelled, log, out preparedLength, out preparedModified);
+        }
+
+        internal static Result Optimize(string source, Func<bool> cancelled, Action<string> log, out long preparedLength, out long preparedModified)
+        {
+            preparedLength = preparedModified = 0;
             string converted = null, recordTemporary = null;
             try
             {
@@ -32,19 +39,25 @@ namespace DIYLevelFastInit
                 string directory = WorkDirectory(source);
                 using (FileStream guard = Lock(directory))
                 {
-                    if (UnityFsRepacker.IsIndependent(source))
+                    FileInfo initial = new FileInfo(source);
+                    long initialLength = initial.Length, initialModified = initial.LastWriteTimeUtc.Ticks;
+                    if (UnityFsRepacker.IsHighCompression(source))
                     {
-                        Log(log, "info bundle already optimized: " + System.IO.Path.GetFileName(source));
+                        if (!CleanupOriginals(source, directory, cancelled, log)) return Result.Failed;
+                        VerifyStampExclusive(source, initialLength, initialModified);
+                        preparedLength = initialLength; preparedModified = initialModified;
+                        Log(log, "level bundle already optimized: " + System.IO.Path.GetFileName(source));
                         return Result.AlreadyOptimized;
                     }
                     if (!UnityFsRepacker.IsEligible(source))
                     {
-                        Log(log, "info bundle source layout unsupported or unavailable; original retained: " + source);
+                        Log(log, "level bundle source layout unsupported or unavailable; original retained: " + source);
                         return Result.Unsupported;
                     }
+                    if (!CleanupOriginals(source, directory, cancelled, log)) return Result.Failed;
                     FileInfo stamp = new FileInfo(source);
                     long length = stamp.Length, ticks = stamp.LastWriteTimeUtc.Ticks;
-                    Log(log, "info bundle optimization started: " + source);
+                    Log(log, "level bundle optimization started: " + source);
                     converted = Unique(directory, "converted-", ".tmp");
                     UnityFsRepacker.ConversionResult result = UnityFsRepacker.Convert(source, converted, cancelled);
                     UnityFsRepacker.ValidateConverted(source, converted, result, cancelled);
@@ -70,12 +83,17 @@ namespace DIYLevelFastInit
                     if (!Commit(source, converted, record.Backup, record.SourceLength, record.SourceHash,
                         record.OutputLength, record.OutputHash, directory, log)) return Result.Failed;
                     converted = null;
-                    Log(log, "info bundle optimized in place: " + source + " (original: " + record.Backup + ")");
+                    if (!DiscardOriginal(source, record, null, log)) return Result.Failed;
+                    if (!CleanupOriginals(source, directory, null, log)) return Result.Failed;
+                    long outputModified = File.GetLastWriteTimeUtc(source).Ticks;
+                    VerifyExclusive(source, result.OutputLength, outputModified, result.OutputHash, null);
+                    preparedLength = result.OutputLength; preparedModified = outputModified;
+                    Log(log, "level bundle optimized in place; original discarded: " + source);
                     return Result.Replaced;
                 }
             }
             catch (OperationCanceledException) { throw; }
-            catch (Exception error) { Log(log, "info bundle optimization failed; original/recovery files retained: " + source + "\n" + error); return Result.Failed; }
+            catch (Exception error) { Log(log, "level bundle optimization failed; original/recovery files retained: " + source + "\n" + error); return Result.Failed; }
             finally { DeleteTemporary(converted, log); DeleteTemporary(recordTemporary, log); }
         }
 
@@ -121,7 +139,7 @@ namespace DIYLevelFastInit
                         string retained = Unique(directory, "restored-output-", ".bundle");
                         if (!Commit(source, temporary, retained, length, currentHash, record.SourceLength, record.SourceHash, directory, log)) return Result.Failed;
                         temporary = null;
-                        Log(log, "original info bundle restored: " + source + " (optimized version retained: " + retained + ")");
+                        Log(log, "original level bundle restored: " + source + " (optimized version retained: " + retained + ")");
                         return Result.Restored;
                     }
                     if (found) Log(log, "original restore skipped: current map or backup differs from its recorded version: " + source);
@@ -129,7 +147,7 @@ namespace DIYLevelFastInit
                 }
             }
             catch (OperationCanceledException) { throw; }
-            catch (Exception error) { Log(log, "original info bundle restore failed; source/recovery files retained: " + source + "\n" + error); return Result.Failed; }
+            catch (Exception error) { Log(log, "original level bundle restore failed; source/recovery files retained: " + source + "\n" + error); return Result.Failed; }
             finally { DeleteTemporary(temporary, log); }
         }
 
@@ -177,9 +195,62 @@ namespace DIYLevelFastInit
         private static string SourcePath(string source)
         {
             string path = System.IO.Path.GetFullPath(source);
-            if (!System.IO.Path.GetFileName(path).StartsWith("info", StringComparison.OrdinalIgnoreCase)) throw new IOException("Only info bundle paths may be optimized");
-            if (!File.Exists(path)) throw new IOException("Source info bundle does not exist");
+            if (!BundleName(System.IO.Path.GetFileName(path))) throw new IOException("Only info* and s_* bundle paths may be optimized");
+            if (!File.Exists(path)) throw new IOException("Source level bundle does not exist");
             return path;
+        }
+
+        private static bool BundleName(string name)
+        {
+            return name.StartsWith("info", StringComparison.OrdinalIgnoreCase)
+                || (name.Length > 2 && name.StartsWith("s_", StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static bool CleanupOriginals(string source, string directory, Func<bool> cancelled, Action<string> log)
+        {
+            bool complete = true;
+            foreach (string path in Directory.GetFiles(directory, "original-*.record"))
+            {
+                CheckCancelled(cancelled);
+                if (!RecordName(path)) continue;
+                Record record;
+                try { record = ReadRecord(path); }
+                catch (Exception error) { Log(log, "invalid original record retained: " + path + "\n" + error); continue; }
+                if (!string.Equals(record.Name, System.IO.Path.GetFileName(source), StringComparison.OrdinalIgnoreCase)) continue;
+                if (!Matches(source, record.OutputLength, record.OutputHash, cancelled))
+                {
+                    Log(log, "original cleanup skipped: current map differs from its recorded optimized version: " + source);
+                    continue;
+                }
+                if (!DiscardOriginal(source, record, cancelled, log)) complete = false;
+            }
+            return complete;
+        }
+
+        private static bool DiscardOriginal(string source, Record record, Func<bool> cancelled, Action<string> log)
+        {
+            try
+            {
+                if (!Matches(source, record.OutputLength, record.OutputHash, cancelled))
+                    throw new IOException("Current bundle differs from the verified replacement");
+                if (File.Exists(record.Backup))
+                {
+                    if (!Matches(record.Backup, record.SourceLength, record.SourceHash, cancelled))
+                        throw new IOException("Original backup differs from its recorded hash");
+                    CheckCancelled(cancelled);
+                    VerifyExclusive(source, record.OutputLength, File.GetLastWriteTimeUtc(source).Ticks, record.OutputHash, cancelled);
+                    File.Delete(record.Backup);
+                }
+                File.Delete(record.Path);
+                Log(log, "verified original bundle discarded: " + record.Backup);
+                return true;
+            }
+            catch (OperationCanceledException) { throw; }
+            catch (Exception error)
+            {
+                Log(log, "original cleanup failed; verified replacement and remaining recovery files retained: " + source + "\n" + error);
+                return false;
+            }
         }
 
         private static string WorkDirectory(string source)
@@ -204,8 +275,15 @@ namespace DIYLevelFastInit
             using (FileStream stream = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.None))
             {
                 if (stream.Length != length || File.GetLastWriteTimeUtc(source).Ticks != ticks || !Same(HashStream(stream, cancelled), hash))
-                    throw new IOException("Source info bundle changed before in-place commit");
+                    throw new IOException("Source level bundle changed before in-place commit");
             }
+        }
+
+        private static void VerifyStampExclusive(string source, long length, long ticks)
+        {
+            using (FileStream stream = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.None))
+                if (stream.Length != length || File.GetLastWriteTimeUtc(source).Ticks != ticks)
+                    throw new IOException("Source level bundle changed during HC readiness check");
         }
 
         private static void CopyStable(string source, string target, Func<bool> cancelled)
@@ -253,7 +331,7 @@ namespace DIYLevelFastInit
             using (BinaryWriter writer = new BinaryWriter(stream))
             {
                 byte[] name = Encoding.UTF8.GetBytes(record.Name);
-                if (name.Length == 0 || name.Length > MaxNameBytes) throw new IOException("Original info basename is too long");
+                if (name.Length == 0 || name.Length > MaxNameBytes) throw new IOException("Original bundle basename is too long");
                 writer.Write(Magic); writer.Write(Schema); writer.Write(name.Length); writer.Write(name);
                 writer.Write(record.SourceLength); writer.Write(record.SourceTicks); writer.Write(record.OutputLength); writer.Write(record.OutputTicks);
                 writer.Write(record.SourceHash); writer.Write(record.OutputHash); writer.Flush(); stream.Flush();
@@ -272,7 +350,7 @@ namespace DIYLevelFastInit
                 if (nameBytes.Length != count) throw new IOException("Truncated original basename");
                 string name = Encoding.UTF8.GetString(nameBytes);
                 if (System.IO.Path.GetFileName(name) != name || name.IndexOfAny(System.IO.Path.GetInvalidFileNameChars()) >= 0
-                    || !name.StartsWith("info", StringComparison.OrdinalIgnoreCase)) throw new IOException("Invalid original basename");
+                    || !BundleName(name)) throw new IOException("Invalid original basename");
                 Record result = new Record { Name = name, Path = path, Backup = System.IO.Path.ChangeExtension(path, ".bundle"),
                     SourceLength = reader.ReadInt64(), SourceTicks = reader.ReadInt64(), OutputLength = reader.ReadInt64(), OutputTicks = reader.ReadInt64(),
                     SourceHash = reader.ReadBytes(32), OutputHash = reader.ReadBytes(32) };

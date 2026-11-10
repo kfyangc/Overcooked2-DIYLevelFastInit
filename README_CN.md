@@ -4,6 +4,16 @@
 
 [English README](README.md)
 
+## 源资源包转换
+
+启动准备现将每个地图顶层的 `info*` 和场景 `s_*` 转为独立 LZ4HC。支持单块 LZMA 和有界单块／多块 LZ4、未压缩输入，包括以前版本生成的普通独立 LZ4。编码器在 64 KiB 窗口中以哈希链搜索最多 256 个候选，使用延迟匹配选择，实际执行高压缩搜索，而非只改标志。每个输出块均经过 HC 编码并标记 `0x03`，不可压缩数据也编码（最多约 0.4% 的常规 LZ4 额外空间），因此已是 HC 的包可直接跳过且不改时间戳。`common*` 和运行库持有的独立资源包不变。
+
+转换保持完整解压数据、场景／CAB 节点元数据和版本不变，核对文件哈希与解压数据哈希后原子替换原路径。LZ4／未压缩输入逐块处理，每块上限 8 MiB，输出重新分成 128 KiB；单块 LZMA 保留有界的原始字典。不支持的布局（包括多块 LZMA）保留可用源文件并记录原因。
+
+替换及哈希校验成功后，删除本次捕获的原文件和恢复记录；替换失败则保留恢复文件。后续检查旧 `original-*.bundle`／`.record` 时，仅在当前优化文件与原件备份均匹配记录哈希时清理，其他无效、被改动或无法确认归属的恢复数据保留并记录原因。新转换成功后没有原件可供恢复。
+
+配置名 `Loading.OptimizeInfoBundlesOnStartup` 保持兼容，同时控制 info 和场景的 HC 转换；`Loading.RestoreOriginalInfoBundlesOnStartup` 仅用于仍保留的历史备份，启动时继续优先于转换。成功日志为 `level bundle optimized in place; original discarded`，统计为 `level bundle optimization complete`。下方版本历史描述的是以前普通 LZ4 与保留备份的行为。
+
 ## 1.8.0
 
 同一个 DLL 兼容 OC2DIYLevel 0.10.0 和 0.11.0：0.10 保留旧的可选菜谱工厂补丁；0.11 的旧工厂已删除，改为检测并挂钩 `CustomRecipeOptionalRegister.GetOrderDefinitionNode`。继续跟踪自定义菜谱节点、两个模型映射工厂和克隆的预制体，同一结果经过多个入口时由原有所有权集合去重；启动日志记录实际选择的可选菜谱入口。插件显示名同时完成本地化。
