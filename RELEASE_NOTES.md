@@ -1,58 +1,35 @@
-# DIYLevelFastInit v1.9.0
+## 中文
 
-审阅稿，尚未发布。需要 BepInEx 5，兼容 OC2DIYLevel 0.10.0 和 0.11.0。
+自动刷新关卡目录，扩展 LZ4HC 转换，并整合资源加载失败提示。
 
-## 关卡目录自动刷新
+- 后台约每 5 秒检查关卡目录，发现变化后自动刷新并转换新增或变化的资源包；只有新增、删除或重命名时显示右上角刷新进度。游戏中、切图或选档期间延后处理。
+- 将 `info_*`、`s_*`等兼容资源包统一转为 LZ4HC；旧版普通 LZ4 包也可转换，已有 HC 包直接跳过。
+- 支持多文件及文件内分块并行，按估算内存预算调度。`Loading.ConversionMemoryBudgetMiB` 默认 800 MiB，可配置；该预算用于转换任务，不是游戏总内存的硬限制。
+- 转换校验成功后替换原文件，删除原件备份与恢复记录；全部任务完成后清理仅剩空闲空锁文件的 `.diylevel-fastinit` 目录。**新转换完成后不保留可供恢复的原件。**
+- 融合 ResourceReadFailureBlocker 源码，兼容 DIYLevel 0.10 和 0.11。真正导致配置构建或资源准备失败时弹窗提示关卡、资源和错误原因，保留原始异常日志。
+- 修复同一关卡再次失败不再提示、错误类型显示不准确，以及把运行期辅助初始化异常直接判为关卡加载失败的问题。
 
-- 后台检查关卡目录，一次检查完成后等待约 5 秒再检查。通过浅层文件列表、大小和修改时间识别变化，日常检查不读取整个资源包。
-- 检测到地图包或资源文件变化后，自动重读目录，并对新增或变化的资源包执行转换，无需手动点击刷新。
-- 只在发现新增、删除或重命名时显示右上角刷新进度；普通轮询、仅内容或时间变化、同批失败重试均静默处理。
-- 游戏中、切图或选档期间延后应用变化，返回安全的前端状态后处理。
+**运行要求：** Overcooked! 2、BepInEx 5，以及 OC2DIYLevel 0.10.0 或 0.11.0。地图另有专用运行库要求时，仍需按地图说明安装。
 
-## 扩展 LZ4HC 转换与并行调度
+**安装方式：** 关闭游戏，替换 `BepInEx/plugins/` 中已有的 FastInit DLL。已安装独立 ResourceReadFailureBlocker 的，请将其 DLL 移出整个 `BepInEx/plugins/` 目录，包括子目录中的副本。
 
-- 通过 UnityFS 文件头识别关卡集目录内的资源包，覆盖 `info_*`、`s_*`、`custom_recipes` 等顶层二进制资源，不再按文件名判断转换范围。
-- 使用真正的 LZ4HC 编码；旧版生成的普通 LZ4 包也可转换，已有 HC 包直接跳过。
-- 按解压后的原生 128 KiB 分块决定文件内部是否并行：不超过一块时串行，多块时并行编码并按原序写回；不再设置 10 MiB 门槛或地图组数量上限。
-- 文件和分块共享按逻辑处理器数量建立的 CPU 工作线程池。任务先预留估算额度，额度不足时等待其他任务完成后再继续派发。
-- 默认转换预算为 800 MiB，可配置。预算参考文件大小、解码字典、编码器和缓冲区等估算值，用于控制转换任务并发，不能视为游戏总内存的硬上限。
-- 转换完整校验后原子替换原路径，成功后删除原文件备份及恢复记录。新转换不会保留可供恢复的原件；转换失败时保留可用源文件和必要恢复数据。
-- 全部任务结束并释放锁后，清理仅含空闲空锁文件的 `.diylevel-fastinit` 目录；包含恢复数据、未知文件或仍被占用的目录继续保留。后续加载不依赖该目录。
+**首次启动：** 资源转换仍需等待，过程中会临时占用额外磁盘空间。
 
-## 融合资源读取失败处理
+---
 
-- 融合 Github@CH3NGY2 提供的 ResourceReadFailureBlocker 源码，适配 OC2DIYLevel 0.11，并保持 0.10 兼容。
-- 必需的模板或配方资源读取失败并导致配置构建失败时，阻止失败的进图／选档就绪流程，取消待处理的资源准备，并通过游戏原生错误框显示关卡、资源和异常信息。资源准备阶段的场景文件缺失等错误也会提示。
-- 替换旧拦截器的闭合泛型补丁，保留实际资源类型参数，修复游戏 Mono 下可能出现的资源类型混淆。
-- 修复缺少 `s_*` 文件时同一关卡只提示一次的问题：同一次加载中的重复错误合并，再次尝试失败可以重新提示。待显示队列最多 5 条，取消整次运行最多弹出 5 次的限制。
-- 资源失败弹窗显示真实的异常类型和原因，修正所有错误都固定显示为“ArgumentException，实例化资源为空”的文案问题。
-- 缩小阻断范围：只有实际导致配置构建或资源准备失败的错误才阻断进图。场景运行期辅助初始化中的异常保留原日志，不再仅凭一次异常就判定整个关卡加载失败。
-- 容许可选资源的正常空值，保留原始异常和日志；错误框支持简体／繁体中文、英语、日语、韩语，其他游戏语言回退英语。
+## English
 
-## 升级与配置
+Automatically refreshes the level catalog, expands LZ4HC conversion and integrates resource-load failure notices.
 
-1. 关闭游戏，替换 `DIYLevelFastInit.dll`。
-2. 将独立的 ResourceReadFailureBlocker DLL 移出整个 `BepInEx/plugins` 目录，包括其子目录中的副本。融合后只需 FastInit；保留独立插件会重复安装旧补丁。
-3. 首次启动可能需要重新转换旧资源包，后续启动会跳过已有 HC 包。
+- Checks level directories in the background roughly every five seconds, refreshing the catalog and converting added or changed bundles when needed. Refresh progress appears only for additions, deletions or renames. Changes wait during gameplay, transitions and save selection.
+- Converts compatible bundles such as `info_*` and `s_*` to LZ4HC. Ordinary LZ4 bundles from older versions can also be converted; existing HC bundles are skipped.
+- Supports parallel files and block encoding within a file, scheduled against an estimated memory budget. `Loading.ConversionMemoryBudgetMiB` defaults to 800 MiB and is configurable; it controls conversion tasks, not total game memory.
+- Replaces source files after validation and deletes their original backups and restoration records. Removes `.diylevel-fastinit` after all tasks finish when it contains only unused empty lock files. **New conversions do not retain restorable originals.**
+- Integrates the ResourceReadFailureBlocker source, supporting DIYLevel 0.10 and 0.11. Failures that prevent configuration building or resource preparation show the level, resource and error details while preserving the original exception logs.
+- Fixes missing notices on repeated failed attempts, inaccurate exception text and runtime helper exceptions being treated as fatal level-load failures.
 
-配置文件：`BepInEx/config/oc2.diylevel.fastinit.cfg`。修改后重启生效。
+**Requirements:** Overcooked! 2, BepInEx 5, and OC2DIYLevel 0.10.0 or 0.11.0. Maps with dedicated runtime library requirements still need them installed per the map's instructions.
 
-| 配置 | 默认值 | 说明 |
-| --- | --- | --- |
-| `Loading.OptimizeInfoBundlesOnStartup` | `true` | 名称保持兼容，控制全部识别出的关卡集资源包转换。 |
-| `Loading.ConversionMemoryBudgetMiB` | `800` | 转换估算预算，范围 16–2048 MiB。 |
-| `Loading.RestoreOriginalInfoBundlesOnStartup` | `false` | 优先恢复仍保留且校验匹配的历史备份；新成功转换没有原件可供恢复。 |
+**Install:** Close the game and replace the existing FastInit DLL in `BepInEx/plugins/`. If the standalone ResourceReadFailureBlocker is installed, move its DLL outside the entire `BepInEx/plugins/` directory, including copies in subdirectories.
 
-旧的 `MaxConcurrentConversionSets` 和 `ParallelConversionThresholdMiB` 不再生效。
-
-资源失败详细日志：`BepInEx/logs/oc2.diylevel.fastinit.resource-failures/`，最多保留 20 份会话日志。
-
-## 验证范围
-
-已完成 Release 构建、两个 DIYLevel 版本的离线资源读取与补丁签名检查，以及目录轮询和刷新逻辑检查。重复失败提示覆盖同关卡连续尝试超过 5 次的情况。
-
-这些检查没有启动游戏。合并后的原生弹窗、young 关卡和联机流程仍需实机验证；本说明不将离线检查等同于游戏内验证。
-
-当前已知：young 11 的饮料／调料机额外初始化会触发运行期空引用，但现有游戏日志显示关卡随后进入了 `InLevel`。已修正 FastInit 对该异常的过度阻断；饮料机交互是否受影响仍需实测。
-
-感谢 Github@CH3NGY2 提供资源读取失败处理源码。第三方来源及改动说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+**First startup:** Resource conversion still takes time and temporarily requires additional disk space.
