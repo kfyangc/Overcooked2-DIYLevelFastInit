@@ -7,7 +7,7 @@ using DIYLevelFastInit.BundleCodecs;
 
 namespace DIYLevelFastInit
 {
-    /// <summary>Replaces info and scene bundles atomically, discarding originals only after verification.</summary>
+    /// <summary>Replaces UnityFS level bundles atomically, discarding originals only after verification.</summary>
     internal static class InfoBundleOptimizer
     {
         internal enum Result { Replaced, AlreadyOptimized, Unsupported, Failed, Restored, NoBackup }
@@ -200,15 +200,16 @@ namespace DIYLevelFastInit
         private static string SourcePath(string source)
         {
             string path = System.IO.Path.GetFullPath(source);
-            if (!BundleName(System.IO.Path.GetFileName(path))) throw new IOException("Only info* and s_* bundle paths may be optimized");
+            if (!BundleName(System.IO.Path.GetFileName(path))) throw new IOException("Invalid level bundle basename");
             if (!File.Exists(path)) throw new IOException("Source level bundle does not exist");
             return path;
         }
 
         private static bool BundleName(string name)
         {
-            return name.StartsWith("info", StringComparison.OrdinalIgnoreCase)
-                || (name.Length > 2 && name.StartsWith("s_", StringComparison.OrdinalIgnoreCase));
+            return !string.IsNullOrEmpty(name) && name != "." && name != ".."
+                && System.IO.Path.GetFileName(name) == name
+                && name.IndexOfAny(System.IO.Path.GetInvalidFileNameChars()) < 0;
         }
 
         private static bool CleanupOriginals(string source, string directory, Func<bool> cancelled, Action<string> log)

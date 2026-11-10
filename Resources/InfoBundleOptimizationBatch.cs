@@ -19,11 +19,11 @@ namespace DIYLevelFastInit
         {
             internal string Directory;
             internal readonly List<string> Infos = new List<string>();
-            internal readonly List<string> Scenes = new List<string>();
+            internal readonly List<string> Others = new List<string>();
             internal int NextInfo, Remaining;
         }
 
-        internal static int MaxConcurrentSets = 2;
+        internal static int MaxConcurrentSets = 4;
         private readonly string[] _paths;
         private readonly bool _restore;
         private readonly int _setLimit, _workerCount;
@@ -102,15 +102,15 @@ namespace DIYLevelFastInit
                         set = new SetWork { Directory = directory };
                         byDirectory.Add(directory, set); _sets.Add(set);
                     }
-                    if (Path.GetFileName(path).StartsWith("s_", StringComparison.OrdinalIgnoreCase)) set.Scenes.Add(path);
-                    else set.Infos.Add(path);
+                    if (Path.GetFileName(path).StartsWith("info", StringComparison.OrdinalIgnoreCase)) set.Infos.Add(path);
+                    else set.Others.Add(path);
                     set.Remaining++;
                 }
                 using (BundleWorkScheduler scheduler = new BundleWorkScheduler(_workerCount))
                 {
                     _scheduler = scheduler;
                     Log("level bundle scheduling: " + _setLimit + " concurrent sets, " + _workerCount
-                        + " shared CPU workers; info blocks parallel, scenes serial per file");
+                        + " shared CPU workers; info blocks parallel, other bundles serial per file");
                     lock (_sync)
                     {
                         StartSets();
@@ -137,10 +137,10 @@ namespace DIYLevelFastInit
                 _activeSets++; _peakSets = Math.Max(_peakSets, _activeSets);
                 Log("level bundle set started: " + set.Directory);
                 QueueNextInfo(set);
-                foreach (string path in set.Scenes)
+                foreach (string path in set.Others)
                 {
-                    string scene = path;
-                    _scheduler.QueueFile(delegate { ProcessFile(set, scene, false); });
+                    string bundle = path;
+                    _scheduler.QueueFile(delegate { ProcessFile(set, bundle, false); });
                 }
             }
         }

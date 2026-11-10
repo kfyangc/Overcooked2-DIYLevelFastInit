@@ -333,9 +333,12 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   uncached preview scene. Keep container/CAB dependencies and cache-file leases until
   their last active, pending, preview or warmup owner has finished.
 
-## Source info and scene bundle optimization
+## Source level bundle optimization
 
-- The owner authorized replacing `info*` and scene `s_*` files. `InfoBundleOptimizer`
+- The owner authorized replacing level-set UnityFS bundles, including `info*`, scene
+  `s_*` and auxiliary files such as `custom_recipes`. Read only the eight-byte UnityFS
+  signature when enumerating the set's top-level files; skip other formats and children.
+  `InfoBundleOptimizer`
   converts supported single-block LZMA and bounded single/multi-block LZ4/raw inputs to
   LZ4HC, including ordinary independent LZ4 produced by older versions, and atomically replaces their original
   paths only after `ValidateConverted` checks output/source file hashes, complete
@@ -345,9 +348,9 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   successful managed conversion does not establish full native Unity acceptance.
 - `InfoBundleOptimizationBatch` owns a cancellable coordinator and a fixed CPU worker
   pool shared by file and info-block jobs. `Loading.MaxConcurrentConversionSets` defaults
-  to 2 (minimum 1), independently of the logical-processor-sized worker budget. Admit
-  one info file per set plus that set's scenes; drain the whole set before admitting
-  its successor. Scenes have no separate quota or intra-file parallelism. Callbacks
+  to 4 (minimum 1), independently of the logical-processor-sized worker budget. Admit
+  one info file per set plus that set's scene/auxiliary bundles; drain the whole set before admitting
+  its successor. Other bundles have no separate quota or intra-file parallelism. Callbacks
   only enqueue diagnostics; main-thread Update drains them. Retain `InfoFilesPreparing`
   until every queued/running block and file worker has exited, including disposal.
   Never call Unity or BepInEx from a worker.

@@ -17,11 +17,11 @@ namespace DIYLevelFastInit
                 UseDirectCatalogReader = Config.Bind("Loading", "EnableDirectCatalogReader", true,
                     "Build missing catalog files by reading scalar metadata without native info assets. Unsupported bundles fall back to the native scanner. Restart after changing this option.").Value;
                 OptimizeInfoFilesOnStartup = Config.Bind("Loading", "OptimizeInfoBundlesOnStartup", true,
-                    "Check custom-level info* and s_* bundles on startup and replace supported LZMA/LZ4/raw files with equivalent LZ4HC files before discovering levels. Verified replacements do not retain original files. Restart after changing this option.").Value;
+                    "Check all top-level UnityFS bundles in custom level sets, including info*, s_* and custom_recipes, and replace supported LZMA/LZ4/raw files with equivalent LZ4HC files before discovering levels. Verified replacements do not retain original files. Restart after changing this option.").Value;
                 RestoreInfoFilesOnStartup = Config.Bind("Loading", "RestoreOriginalInfoBundlesOnStartup", false,
                     "Restore legacy backed-up original bundles on startup. New successful conversions retain no originals. Restoration takes precedence over optimization. Restart after changing this option.").Value;
-                InfoBundleOptimizationBatch.MaxConcurrentSets = Math.Max(1, Config.Bind("Loading", "MaxConcurrentConversionSets", 2,
-                    "Maximum level sets converted at once. Each set runs one info file plus its scene files; info blocks and scene files share CPU workers capped at the available logical processor count. Restart after changing this option.").Value);
+                InfoBundleOptimizationBatch.MaxConcurrentSets = Math.Max(1, Config.Bind("Loading", "MaxConcurrentConversionSets", 4,
+                    "Maximum level sets converted at once. Each set runs one info file plus its scene and auxiliary bundles; all work shares CPU workers capped at the available logical processor count. Restart after changing this option.").Value);
                 Log.LogInfo("level bundles use source files directly; runtime LZ4 cache is disabled (legacy cache options are ignored)");
             }
             catch (Exception e) { Log.LogWarning("level bundle startup options unavailable; defaults retained: " + e.Message); }
@@ -36,8 +36,8 @@ namespace DIYLevelFastInit
                 List<string> paths = new List<string>();
                 foreach (DirectoryInfo dir in FastInitHost.SafeGetDirs(Path.Combine(pluginDir, "levels")))
                 {
-                    foreach (FileInfo file in FastInitHost.SafeGetFiles(dir, "info*")) paths.Add(file.FullName);
-                    foreach (FileInfo file in FastInitHost.SafeGetFiles(dir, "s_*")) paths.Add(file.FullName);
+                    foreach (FileInfo file in FastInitHost.SafeGetFiles(dir, "*"))
+                        if (LevelBundleFiles.IsBundle(file.FullName)) paths.Add(file.FullName);
                 }
                 batch = new InfoBundleOptimizationBatch(paths.ToArray(), RestoreInfoFilesOnStartup);
                 _infoOptimization = batch;
