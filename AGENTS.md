@@ -2,7 +2,7 @@
 
 BepInEx 5 plugin (net35) that patches
 [OC2DIYLevel](https://github.com/gua248/Overcooked2-LevelEditor) 0.10.0 and 0.11.0 for Overcooked! 2.
-Version 1.8.0 keeps a complete lightweight level catalog while loading info resources
+Version 1.9.0 keeps a complete lightweight level catalog while loading info resources
 and building configurations only for the selected level. Async discovery, menu healing,
 the progress indicator, and incremental hot reload remain supported.
 
@@ -295,9 +295,24 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   as a fallback without confirming the correct intended asset.
   Empty particle-renderer material slots can be intentional; do not report them as
   broken floor materials.
+- A single managed directory poller checks every five seconds. Enumerate only the
+  level root and each set's top-level files; compare names, lengths and UTC write ticks
+  individually, without hashing/reading bundle payloads or recursing into recovery dirs.
+  Unchanged polls never reset previews, rebuild menus or collect unused Unity assets.
+- Gate refresh progress on new set/file-name additions, deletions or renames, not
+  file lengths/timestamps. Keep the last notified entry snapshot separate from the
+  successfully consumed catalog snapshot so failure retries do not flash progress.
+  Silence conversion and subsequent warmup labels for a quiet refresh, while keeping
+  initial discovery and selected-level preparation visible. A final-set removal can
+  still display refresh progress with zero remaining sets.
 - Hot sync diffs `SetSnapshot`s, updates changed entries and restores directory order.
-  It is blocked during DIY gameplay or transitions; `Syncing` blocks level selection
-  during refresh. Sweep only DIY scene bundles through the original bundle manager.
+  Changes remain pending during DIY gameplay, transitions and save selection. `Syncing`
+  blocks level selection and source previews. Drain native preview/warmup requests,
+  release unneeded info/CAB containers and sweep affected DIY scene bundles before
+  running the existing LZ4HC conversion batch for changed/added sets. Restore mode and
+  disabled optimization skip refresh conversion. Accept only processed file stamps;
+  retain failed changes for another five-second retry and stop polling on shutdown.
+  Sweep only DIY scene bundles through the original bundle manager.
   Do not force-unload vanilla dependencies or `common*`; their lifetime belongs to the
   original reference counts or other loaders.
 - `FastInitHost.Guard` drives nested iterators and disposes them on failure, preserving
@@ -360,8 +375,9 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   until every queued/running block and file worker has exited, including disposal.
   Never call Unity or BepInEx from a worker.
 - Complete this startup phase before any info graph/catalog/preview/native request.
-  Keep synchronous `common` initialization and IsInitialized timing unchanged. Do not
-  replace files during hot refresh. Early remote DIY messages may use a basename-only
+  Keep synchronous `common` initialization and IsInitialized timing unchanged. Hot
+  refresh must drain native requests and release affected resources before replacement.
+  Early remote DIY messages may use a basename-only
   file lookup while the catalog is empty, but must retain copied payloads, acknowledge
   start and wait for startup/catalog completion before BeginClientPreparation. Setting
   `_pendingScene` early would deadlock discovery's transition wait.

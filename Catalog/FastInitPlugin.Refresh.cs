@@ -36,6 +36,11 @@ namespace DIYLevelFastInit
                 Log.LogInfo("sync skipped: a DIY level load is in progress");
                 return;
             }
+            if (OnDemandResources.HasDiySaveSelection || LoadingScreenFlow.IsLoading)
+            {
+                Log.LogInfo("sync skipped: save selection or scene loading is active");
+                return;
+            }
             // Sessions can linger in the frontend; PrepareLevel replaces stale directories.
             if (GameObject.Find("/Frontend/FrontendParent/FrontendRootMenu") == null)
             {
@@ -49,20 +54,28 @@ namespace DIYLevelFastInit
         {
             Loading = true;
             Syncing = true;
+            QuietDirectoryRefresh = true;
+            bool completed = false;
             try
             {
                 Log.LogInfo("sync started");
                 OnDemandResources.ResetFrontend();
                 yield return OnDemandResources.WaitForPreview();
-                List<DirectoryInfo> dirs = FastInitHost.SafeGetDirs(Path.Combine(GetDiyPluginDir(), "levels"));
-                TotalSets = dirs.Count;
-                if (dirs.Count == 0 && DIYLevelAssetBundleManager.levelSetInfos != null
-                    && DIYLevelAssetBundleManager.levelSetInfos.Count > 0)
+                OnDemandResources.ResetFrontend();
+                while (!OnDemandResources.CatalogFilesAreIdle)
                 {
-                    // A transiently empty scan must not unload every loaded set.
-                    Log.LogWarning("sync: levels/ scan returned nothing while sets are loaded; aborting");
-                    yield break;
+                    if (!RefreshContextIsSafe()) yield break;
+                    yield return null;
+                    OnDemandResources.ResetFrontend();
                 }
+                Box<LevelDirectorySnapshot> scan = new Box<LevelDirectorySnapshot>();
+                yield return ScanDirectoryForSync(scan);
+                if (scan.Value == null || !RefreshContextIsSafe()) yield break;
+                LevelDirectorySnapshot observed = scan.Value;
+                QuietDirectoryRefresh = observed.SameEntriesAs(_notifiedDirectory);
+                _notifiedDirectory = observed;
+                List<DirectoryInfo> dirs = new List<DirectoryInfo>(observed.Directories);
+                TotalSets = dirs.Count;
                 List<DirectoryInfo> added = new List<DirectoryInfo>();
                 List<DirectoryInfo> infoChanged = new List<DirectoryInfo>();
                 List<DirectoryInfo> contentChanged = new List<DirectoryInfo>();
@@ -72,17 +85,15 @@ namespace DIYLevelFastInit
                 // Diff only — no yields allowed inside this try (C# iterators).
                 try
                 {
-                    Dictionary<string, SetSnapshot> fresh = new Dictionary<string, SetSnapshot>(StringComparer.OrdinalIgnoreCase);
+                    Dictionary<string, SetSnapshot> fresh = observed.Sets;
                     foreach (DirectoryInfo dir in dirs)
                     {
-                        List<FileInfo> infoFiles = FastInitHost.SafeGetFiles(dir, "info*");
-                        if (infoFiles.Count == 0)
+                        SetSnapshot snap = fresh[dir.FullName];
+                        if (snap.InfoFileName == null)
                         {
                             Log.LogWarning("sync: missing info file: " + dir.Name);
                             continue;
                         }
-                        SetSnapshot snap = ReadSnapshot(dir, infoFiles[0]);
-                        fresh[dir.FullName] = snap;
                         SetSnapshot old;
                         bool hasSnapshot = Snapshots.TryGetValue(dir.FullName, out old);
                         bool inList = IndexOfSet(DIYLevelAssetBundleManager.levelSetInfos, dir.FullName) >= 0;
@@ -90,17 +101,11 @@ namespace DIYLevelFastInit
                         {
                             added.Add(dir);
                         }
-                        else if (!hasSnapshot)
-                        {
-                            unchanged++; // loaded before snapshots existed; leave it alone
-                        }
-                        else if (old.InfoFileName != snap.InfoFileName
-                            || old.InfoMtimeUtc != snap.InfoMtimeUtc
-                            || old.InfoLength != snap.InfoLength)
+                        else if (!hasSnapshot || !LevelDirectorySnapshot.SameInfo(old, snap))
                         {
                             infoChanged.Add(dir);
                         }
-                        else if (old.DirMaxMtimeUtc != snap.DirMaxMtimeUtc)
+                        else if (!LevelDirectorySnapshot.SameSet(old, snap))
                         {
                             contentChanged.Add(dir);
                         }
@@ -111,7 +116,8 @@ namespace DIYLevelFastInit
                     }
                     foreach (KeyValuePair<string, LevelSetInfoSO> kv in DIYLevelAssetBundleManager.levelSetInfos)
                     {
-                        if (!fresh.ContainsKey(kv.Key))
+                        SetSnapshot current;
+                        if (!fresh.TryGetValue(kv.Key, out current) || current.InfoFileName == null)
                         {
                             removed.Add(kv.Key);
                         }
@@ -125,6 +131,27 @@ namespace DIYLevelFastInit
                 if (diffFailed)
                 {
                     yield break;
+                }
+
+                List<DirectoryInfo> changed = new List<DirectoryInfo>(added);
+                changed.AddRange(infoChanged);
+                changed.AddRange(contentChanged);
+                foreach (DirectoryInfo dir in changed)
+                {
+                    int index = IndexOfSet(DIYLevelAssetBundleManager.levelSetInfos, dir.FullName);
+                    if (index >= 0) SweepSetBundles(DIYLevelAssetBundleManager.levelSetInfos[index].Value);
+                }
+                Box<bool> conversionFailed = new Box<bool>();
+                yield return PrepareChangedBundleFiles(observed, changed, conversionFailed);
+                if (!RefreshContextIsSafe()) yield break;
+                for (int index = contentChanged.Count - 1; index >= 0; index--)
+                {
+                    DirectoryInfo dir = contentChanged[index];
+                    if (!LevelDirectorySnapshot.SameInfo(Snapshots[dir.FullName], observed.Sets[dir.FullName]))
+                    {
+                        contentChanged.RemoveAt(index);
+                        infoChanged.Add(dir);
+                    }
                 }
 
                 int removedCount = 0, reloaded = 0, swept = 0, addedCount = 0, failed = 0;
@@ -149,6 +176,8 @@ namespace DIYLevelFastInit
                     if (done.Value)
                     {
                         reloaded++;
+                        Snapshots[dir.FullName] = ConsumedSnapshot(observed.Sets[dir.FullName], Snapshots[dir.FullName]);
+                        if (!LevelDirectorySnapshot.SameInfo(Snapshots[dir.FullName], observed.Sets[dir.FullName])) failed++;
                     }
                     else
                     {
@@ -164,13 +193,14 @@ namespace DIYLevelFastInit
                         if (idx >= 0)
                         {
                             SweepSetBundles(infos[idx].Value);
-                            Snapshots[dir.FullName] = ReadSnapshot(dir, FastInitHost.SafeGetFiles(dir, "info*")[0]);
+                            Snapshots[dir.FullName] = observed.Sets[dir.FullName];
                             swept++;
                             Log.LogInfo("sync: swept resident bundles of [" + dir.Name + "]");
                         }
                     }
                     catch (Exception e)
                     {
+                        failed++;
                         Log.LogWarning("sync: content sweep of [" + dir.Name + "] failed: " + e.Message);
                     }
                 }
@@ -181,6 +211,8 @@ namespace DIYLevelFastInit
                     if (done.Value)
                     {
                         addedCount++;
+                        Snapshots[dir.FullName] = ConsumedSnapshot(observed.Sets[dir.FullName], Snapshots[dir.FullName]);
+                        if (!LevelDirectorySnapshot.SameInfo(Snapshots[dir.FullName], observed.Sets[dir.FullName])) failed++;
                     }
                     else
                     {
@@ -210,12 +242,40 @@ namespace DIYLevelFastInit
                     HealLevelSetButtons();
                     ResetArcadeMenu();
                 }
+                if (conversionFailed.Value)
+                {
+                    failed++;
+                    foreach (DirectoryInfo dir in changed)
+                    {
+                        SetSnapshot previous;
+                        if (!Snapshots.TryGetValue(dir.FullName, out previous)) continue;
+                        SetSnapshot retry = ConsumedSnapshot(previous, previous);
+                        retry.Files = null;
+                        Snapshots[dir.FullName] = retry;
+                    }
+                }
                 Log.LogInfo("sync: " + addedCount + " added, " + removedCount + " removed, "
                     + reloaded + " info-reloaded, " + swept + " content-swept, "
                     + unchanged + " unchanged" + (failed > 0 ? ", " + failed + " failed" : ""));
+                if (failed == 0)
+                {
+                    AcceptDirectorySnapshot(observed);
+                    completed = true;
+                }
+                else
+                {
+                    _refreshRetry = true;
+                    _directoryChanged = true;
+                    _directoryPoller.Rescan();
+                }
             }
             finally
             {
+                if (!completed)
+                {
+                    _refreshRetry = true;
+                    _directoryChanged = true;
+                }
                 Syncing = false;
                 FinishLoading();
             }

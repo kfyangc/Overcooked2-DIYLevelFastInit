@@ -20,7 +20,7 @@ namespace DIYLevelFastInit
     {
         public const string PluginGuid = "oc2.diylevel.fastinit";
         public const string PluginName = "DIYLevel 快速载入 / DIYLevel 启动速度优化 / DIYLevel FastInit";
-        public const string PluginVersion = "1.8.0";
+        public const string PluginVersion = "1.9.0";
 
         internal static ManualLogSource Log;
 
@@ -39,6 +39,7 @@ namespace DIYLevelFastInit
 
         internal static bool Loading;
         internal static bool Syncing;
+        internal static bool QuietDirectoryRefresh;
         internal static int TotalSets;
 
         internal static FastInitPlugin Instance;
@@ -55,6 +56,11 @@ namespace DIYLevelFastInit
         internal static string InfoOptimizationProgress;
         internal static bool UseDirectCatalogReader = true;
         private static CatalogMetadataRequest _catalogRead;
+        private LevelDirectoryPoller _directoryPoller;
+        private LevelDirectorySnapshot _notifiedDirectory;
+        private LevelDirectorySnapshot _observedDirectory;
+        private bool _directoryChanged, _directoryScanFailed, _destroying, _refreshRetry;
+        private float _nextAutomaticSync;
 
         private void Awake()
         {
@@ -105,6 +111,8 @@ namespace DIYLevelFastInit
 
         private void OnDestroy()
         {
+            _destroying = true;
+            if (_directoryPoller != null) _directoryPoller.Dispose();
             if (_infoOptimization != null) _infoOptimization.Dispose();
             if (_catalogRead != null) _catalogRead.Dispose();
             OnDemandResources.ResetSaveSelection();

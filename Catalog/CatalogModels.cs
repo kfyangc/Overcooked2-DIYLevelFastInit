@@ -23,7 +23,8 @@ namespace DIYLevelFastInit
         public string InfoFileName;
         public DateTime InfoMtimeUtc;
         public long InfoLength;
-        public DateTime DirMaxMtimeUtc;
+        public string DirectoryName;
+        public LevelDirectorySnapshot.FileStamp[] Files;
     }
 
     internal sealed class PlayerMetadata

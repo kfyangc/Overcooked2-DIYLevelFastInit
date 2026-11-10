@@ -27,7 +27,7 @@ namespace DIYLevelFastInit
 
         private static bool PreviewPrefix(Image __0, LevelInfoSO level)
         {
-            if (FastInitPlugin.InfoFilesPreparing) return false;
+            if (FastInitPlugin.InfoFilesPreparing || FastInitPlugin.Syncing) return false;
             if (__0 == null) return true;
             if (level == null)
             {
