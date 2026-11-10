@@ -14,6 +14,8 @@
 
 配置名 `Loading.OptimizeInfoBundlesOnStartup` 保持兼容，同时控制 info 和场景的 HC 转换；`Loading.RestoreOriginalInfoBundlesOnStartup` 仅用于仍保留的历史备份，启动时继续优先于转换。成功日志为 `level bundle optimized in place; original discarded`，统计为 `level bundle optimization complete`。下方版本历史描述的是以前普通 LZ4 与保留备份的行为。
 
+`Loading.MaxConcurrentConversionSets=2` 控制同时处理的关卡集数，最小为 1，修改后重启生效。每组同时调度一个 info 和该组的 s 文件；同组若有多个 info，仍逐个处理，一组全部文件完成后再进入下一组。info 内部按独立的 128 KiB 块并行压缩、按原序写回；s 文件内部保持串行。文件任务和块任务共用一个按可用逻辑处理器数建立的线程池，增加关卡集数不会让每个文件再各自创建一套 CPU 线程，s 也不设独立并行配额。info 待处理块有数量上限，每个工作线程持有独立编码器；等待分块的线程会协助处理块任务，单核也能完成。替换使用文件级互斥锁，同组不同文件可以同时处理，同一文件仍互斥，并与旧版目录锁兼容。
+
 ## 1.8.0
 
 同一个 DLL 兼容 OC2DIYLevel 0.10.0 和 0.11.0：0.10 保留旧的可选菜谱工厂补丁；0.11 的旧工厂已删除，改为检测并挂钩 `CustomRecipeOptionalRegister.GetOrderDefinitionNode`。继续跟踪自定义菜谱节点、两个模型映射工厂和克隆的预制体，同一结果经过多个入口时由原有所有权集合去重；启动日志记录实际选择的可选菜谱入口。插件显示名同时完成本地化。

@@ -2,10 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
+using DIYLevelFastInit.BundleCodecs;
 
 namespace DIYLevelFastInit
 {
-    /// <summary>Processes level bundle replacements serially without calling Unity from its worker.</summary>
+    /// <summary>Converts a configurable number of sets using one shared, bounded CPU worker pool.</summary>
     internal sealed class InfoBundleOptimizationBatch : IDisposable
     {
         internal sealed class PreparedFile
@@ -14,29 +15,63 @@ namespace DIYLevelFastInit
             internal long Length, Modified;
         }
 
+        private sealed class SetWork
+        {
+            internal string Directory;
+            internal readonly List<string> Infos = new List<string>();
+            internal readonly List<string> Scenes = new List<string>();
+            internal int NextInfo, Remaining;
+        }
+
+        internal static int MaxConcurrentSets = 2;
         private readonly string[] _paths;
         private readonly bool _restore;
+        private readonly int _setLimit, _workerCount;
         private readonly object _sync = new object();
         private readonly Queue<string> _logs = new Queue<string>();
         private readonly List<PreparedFile> _prepared = new List<PreparedFile>();
+        private readonly List<string> _activePaths = new List<string>();
+        private readonly List<SetWork> _sets = new List<SetWork>();
         private Thread _worker;
+        private volatile BundleWorkScheduler _scheduler;
         private volatile bool _cancelled, _done;
-        private volatile int _completed, _failed;
-        private volatile string _current;
+        private int _completed, _failed, _replaced, _ready, _skipped, _restored;
+        private int _activeSets, _nextSet, _peakSets;
 
         internal InfoBundleOptimizationBatch(string[] paths, bool restore)
+            : this(paths, restore, MaxConcurrentSets, Math.Max(1, Environment.ProcessorCount)) { }
+
+        internal InfoBundleOptimizationBatch(string[] paths, bool restore, int setLimit, int workers)
         {
             if (paths == null) throw new ArgumentNullException("paths");
-            _paths = (string[])paths.Clone();
-            _restore = restore;
+            if (setLimit < 1 || workers < 1) throw new ArgumentOutOfRangeException("setLimit");
+            HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            List<string> unique = new List<string>();
+            foreach (string path in paths)
+            {
+                string full = Path.GetFullPath(path);
+                if (seen.Add(full)) unique.Add(full);
+            }
+            _paths = unique.ToArray(); _restore = restore; _setLimit = setLimit; _workerCount = workers;
         }
 
         internal bool Done { get { return _done; } }
-        internal int Completed { get { return _completed; } }
-        internal int Failed { get { return _failed; } }
+        internal int Completed { get { return Interlocked.CompareExchange(ref _completed, 0, 0); } }
+        internal int Failed { get { return Interlocked.CompareExchange(ref _failed, 0, 0); } }
         internal PreparedFile[] PreparedFiles { get { lock (_sync) return _prepared.ToArray(); } }
         internal int Total { get { return _paths.Length; } }
-        internal string Current { get { return _current; } }
+        internal int PeakSets { get { lock (_sync) return _peakSets; } }
+        internal int WorkerCount { get { return _workerCount; } }
+        internal int PeakWorkers { get { return _scheduler == null ? 0 : _scheduler.PeakWorkers; } }
+        internal int BlockJobsQueued { get { return _scheduler == null ? 0 : _scheduler.BlockJobsQueued; } }
+        internal string Current
+        {
+            get
+            {
+                lock (_sync) return _activePaths.Count == 0 ? null : Path.GetFileName(_activePaths[0])
+                    + (_activePaths.Count > 1 ? " (+" + (_activePaths.Count - 1) + " files)" : "");
+            }
+        }
 
         internal void Start()
         {
@@ -45,7 +80,7 @@ namespace DIYLevelFastInit
                 if (_worker != null) throw new InvalidOperationException("Level bundle batch already started");
                 try
                 {
-                    _worker = new Thread(Work) { IsBackground = true, Name = "DIY level bundle optimizer", Priority = ThreadPriority.BelowNormal };
+                    _worker = new Thread(Work) { IsBackground = true, Name = "DIY bundle batch coordinator", Priority = ThreadPriority.BelowNormal };
                     _worker.Start();
                 }
                 catch { _done = true; throw; }
@@ -55,46 +90,113 @@ namespace DIYLevelFastInit
         private void Work()
         {
             System.Diagnostics.Stopwatch timer = System.Diagnostics.Stopwatch.StartNew();
-            int replaced = 0, ready = 0, skipped = 0, restored = 0;
             try
             {
+                Dictionary<string, SetWork> byDirectory = new Dictionary<string, SetWork>(StringComparer.OrdinalIgnoreCase);
                 foreach (string path in _paths)
                 {
-                    if (_cancelled) break;
-                    _current = Path.GetFileName(path);
-                    double started = timer.Elapsed.TotalMilliseconds;
-                    long preparedLength = 0, preparedModified = 0;
-                    InfoBundleOptimizer.Result result = _restore
-                        ? InfoBundleOptimizer.Restore(path, () => _cancelled, Log)
-                        : InfoBundleOptimizer.Optimize(path, () => _cancelled, Log, out preparedLength, out preparedModified);
-                    if (preparedLength > 0 && (result == InfoBundleOptimizer.Result.Replaced || result == InfoBundleOptimizer.Result.AlreadyOptimized))
+                    string directory = Path.GetDirectoryName(path);
+                    SetWork set;
+                    if (!byDirectory.TryGetValue(directory, out set))
                     {
-                        PreparedFile prepared = new PreparedFile { Path = path, Length = preparedLength, Modified = preparedModified };
-                        lock (_sync) _prepared.Add(prepared);
+                        set = new SetWork { Directory = directory };
+                        byDirectory.Add(directory, set); _sets.Add(set);
                     }
-                    Log("level bundle preparation timing [" + Path.GetFileName(path) + "]: "
-                        + StartupTimings.Ms(timer.Elapsed.TotalMilliseconds - started) + " ms, result=" + result);
-                    switch (result)
+                    if (Path.GetFileName(path).StartsWith("s_", StringComparison.OrdinalIgnoreCase)) set.Scenes.Add(path);
+                    else set.Infos.Add(path);
+                    set.Remaining++;
+                }
+                using (BundleWorkScheduler scheduler = new BundleWorkScheduler(_workerCount))
+                {
+                    _scheduler = scheduler;
+                    Log("level bundle scheduling: " + _setLimit + " concurrent sets, " + _workerCount
+                        + " shared CPU workers; info blocks parallel, scenes serial per file");
+                    lock (_sync)
                     {
-                        case InfoBundleOptimizer.Result.Replaced: replaced++; break;
-                        case InfoBundleOptimizer.Result.AlreadyOptimized: ready++; break;
-                        case InfoBundleOptimizer.Result.Restored: restored++; break;
-                        case InfoBundleOptimizer.Result.Failed: _failed++; break;
-                        default: skipped++; break;
+                        StartSets();
+                        while (_activeSets != 0) Monitor.Wait(_sync);
                     }
-                    _completed++;
                 }
             }
-            catch (OperationCanceledException) { _cancelled = true; }
-            catch (Exception error) { _failed++; Log("level bundle worker failed: " + error); }
+            catch (Exception error) { Interlocked.Increment(ref _failed); Log("level bundle worker failed: " + error); }
             finally
             {
                 Log("level bundle " + (_restore ? "restore" : "optimization") + (_cancelled ? " cancelled" : " complete")
-                    + ": " + replaced + " replaced, " + ready + " already HC, " + restored + " restored, "
-                    + skipped + " skipped, " + _failed + " failed (" + _completed + "/" + _paths.Length + ", "
+                    + ": " + _replaced + " replaced, " + _ready + " already HC, " + _restored + " restored, "
+                    + _skipped + " skipped, " + _failed + " failed (" + _completed + "/" + _paths.Length + ", "
                     + StartupTimings.Ms(timer.Elapsed.TotalMilliseconds) + " ms)");
-                _current = null;
                 _done = true;
+            }
+        }
+
+        private void StartSets()
+        {
+            while (!_cancelled && _activeSets < _setLimit && _nextSet < _sets.Count)
+            {
+                SetWork set = _sets[_nextSet++];
+                _activeSets++; _peakSets = Math.Max(_peakSets, _activeSets);
+                Log("level bundle set started: " + set.Directory);
+                QueueNextInfo(set);
+                foreach (string path in set.Scenes)
+                {
+                    string scene = path;
+                    _scheduler.QueueFile(delegate { ProcessFile(set, scene, false); });
+                }
+            }
+        }
+
+        private void QueueNextInfo(SetWork set)
+        {
+            if (set.NextInfo >= set.Infos.Count) return;
+            string info = set.Infos[set.NextInfo++];
+            _scheduler.QueueInfo(delegate { ProcessFile(set, info, true); });
+        }
+
+        private void ProcessFile(SetWork set, string path, bool info)
+        {
+            System.Diagnostics.Stopwatch timer = System.Diagnostics.Stopwatch.StartNew();
+            lock (_sync) _activePaths.Add(path);
+            try
+            {
+                if (_cancelled) return;
+                long preparedLength = 0, preparedModified = 0;
+                InfoBundleOptimizer.Result result = _restore
+                    ? InfoBundleOptimizer.Restore(path, () => _cancelled, Log)
+                    : InfoBundleOptimizer.Optimize(path, () => _cancelled, Log, out preparedLength, out preparedModified, _scheduler);
+                if (preparedLength > 0 && (result == InfoBundleOptimizer.Result.Replaced || result == InfoBundleOptimizer.Result.AlreadyOptimized))
+                    lock (_sync) _prepared.Add(new PreparedFile { Path = path, Length = preparedLength, Modified = preparedModified });
+                Log("level bundle preparation timing [" + Path.GetFileName(path) + "]: "
+                    + StartupTimings.Ms(timer.Elapsed.TotalMilliseconds) + " ms, result=" + result);
+                switch (result)
+                {
+                    case InfoBundleOptimizer.Result.Replaced: Interlocked.Increment(ref _replaced); break;
+                    case InfoBundleOptimizer.Result.AlreadyOptimized: Interlocked.Increment(ref _ready); break;
+                    case InfoBundleOptimizer.Result.Restored: Interlocked.Increment(ref _restored); break;
+                    case InfoBundleOptimizer.Result.Failed: Interlocked.Increment(ref _failed); break;
+                    default: Interlocked.Increment(ref _skipped); break;
+                }
+                Interlocked.Increment(ref _completed);
+            }
+            catch (OperationCanceledException) { _cancelled = true; }
+            catch (Exception error) { Interlocked.Increment(ref _failed); Log("level bundle worker failed [" + path + "]: " + error); }
+            finally
+            {
+                lock (_sync)
+                {
+                    _activePaths.Remove(path);
+                    if (info)
+                    {
+                        if (_cancelled) { set.Remaining -= set.Infos.Count - set.NextInfo; set.NextInfo = set.Infos.Count; }
+                        else QueueNextInfo(set);
+                    }
+                    if (--set.Remaining == 0)
+                    {
+                        _activeSets--;
+                        Log("level bundle set finished: " + set.Directory);
+                        StartSets();
+                    }
+                    Monitor.PulseAll(_sync);
+                }
             }
         }
 

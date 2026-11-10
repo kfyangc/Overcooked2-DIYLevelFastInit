@@ -20,6 +20,8 @@ namespace DIYLevelFastInit
                     "Check custom-level info* and s_* bundles on startup and replace supported LZMA/LZ4/raw files with equivalent LZ4HC files before discovering levels. Verified replacements do not retain original files. Restart after changing this option.").Value;
                 RestoreInfoFilesOnStartup = Config.Bind("Loading", "RestoreOriginalInfoBundlesOnStartup", false,
                     "Restore legacy backed-up original bundles on startup. New successful conversions retain no originals. Restoration takes precedence over optimization. Restart after changing this option.").Value;
+                InfoBundleOptimizationBatch.MaxConcurrentSets = Math.Max(1, Config.Bind("Loading", "MaxConcurrentConversionSets", 2,
+                    "Maximum level sets converted at once. Each set runs one info file plus its scene files; info blocks and scene files share CPU workers capped at the available logical processor count. Restart after changing this option.").Value);
                 Log.LogInfo("level bundles use source files directly; runtime LZ4 cache is disabled (legacy cache options are ignored)");
             }
             catch (Exception e) { Log.LogWarning("level bundle startup options unavailable; defaults retained: " + e.Message); }

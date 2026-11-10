@@ -30,6 +30,11 @@ namespace DIYLevelFastInit
 
         internal static Result Optimize(string source, Func<bool> cancelled, Action<string> log, out long preparedLength, out long preparedModified)
         {
+            return Optimize(source, cancelled, log, out preparedLength, out preparedModified, null);
+        }
+
+        internal static Result Optimize(string source, Func<bool> cancelled, Action<string> log, out long preparedLength, out long preparedModified, BundleWorkScheduler scheduler)
+        {
             preparedLength = preparedModified = 0;
             string converted = null, recordTemporary = null;
             try
@@ -37,7 +42,7 @@ namespace DIYLevelFastInit
                 source = SourcePath(source);
                 CheckCancelled(cancelled);
                 string directory = WorkDirectory(source);
-                using (FileStream guard = Lock(directory))
+                using (IDisposable guard = Lock(directory, source))
                 {
                     FileInfo initial = new FileInfo(source);
                     long initialLength = initial.Length, initialModified = initial.LastWriteTimeUtc.Ticks;
@@ -59,7 +64,7 @@ namespace DIYLevelFastInit
                     long length = stamp.Length, ticks = stamp.LastWriteTimeUtc.Ticks;
                     Log(log, "level bundle optimization started: " + source);
                     converted = Unique(directory, "converted-", ".tmp");
-                    UnityFsRepacker.ConversionResult result = UnityFsRepacker.Convert(source, converted, cancelled);
+                    UnityFsRepacker.ConversionResult result = UnityFsRepacker.Convert(source, converted, cancelled, null, scheduler);
                     UnityFsRepacker.ValidateConverted(source, converted, result, cancelled);
                     CheckCancelled(cancelled);
                     if (result == null || result.SourceLength != length || !ValidHash(result.SourceHash) || !ValidHash(result.OutputHash))
@@ -106,7 +111,7 @@ namespace DIYLevelFastInit
                 CheckCancelled(cancelled);
                 string directory = System.IO.Path.Combine(System.IO.Path.GetDirectoryName(source), ".diylevel-fastinit");
                 if (!Directory.Exists(directory)) return Result.NoBackup;
-                using (FileStream guard = Lock(directory))
+                using (IDisposable guard = Lock(directory, source))
                 {
                     FileInfo stamp = new FileInfo(source);
                     long length = stamp.Length, ticks = stamp.LastWriteTimeUtc.Ticks;
@@ -260,8 +265,34 @@ namespace DIYLevelFastInit
             return directory;
         }
 
-        private static FileStream Lock(string directory)
-        { return new FileStream(System.IO.Path.Combine(directory, "replace.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None); }
+        private sealed class ReplacementGuard : IDisposable
+        {
+            internal FileStream Directory, Source;
+            public void Dispose()
+            {
+                try { if (Source != null) Source.Dispose(); }
+                finally { if (Directory != null) Directory.Dispose(); }
+            }
+        }
+
+        private static IDisposable Lock(string directory, string source)
+        {
+            ReplacementGuard guard = new ReplacementGuard();
+            try
+            {
+                // Sharing the directory lock still excludes older optimizers taking it exclusively.
+                guard.Directory = new FileStream(System.IO.Path.Combine(directory, "replace.lock"), FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite, FileShare.ReadWrite);
+                string name = System.IO.Path.GetFileName(source).ToUpperInvariant();
+                byte[] key;
+                using (SHA256 hash = SHA256.Create()) key = hash.ComputeHash(Encoding.UTF8.GetBytes(name));
+                string lockName = "replace-" + BitConverter.ToString(key).Replace("-", "") + ".lock";
+                guard.Source = new FileStream(System.IO.Path.Combine(directory, lockName), FileMode.OpenOrCreate,
+                    FileAccess.ReadWrite, FileShare.None);
+                return guard;
+            }
+            catch { guard.Dispose(); throw; }
+        }
 
         private static string Unique(string directory, string prefix, string suffix)
         {

@@ -148,6 +148,11 @@ namespace DIYLevelFastInit.BundleCodecs
 
         internal static ConversionResult Convert(string source, string destination, Func<bool> cancelled, Action checkpoint)
         {
+            return Convert(source, destination, cancelled, checkpoint, null);
+        }
+
+        internal static ConversionResult Convert(string source, string destination, Func<bool> cancelled, Action checkpoint, BundleWorkScheduler scheduler)
+        {
             if (string.Equals(Path.GetFullPath(source), Path.GetFullPath(destination), StringComparison.OrdinalIgnoreCase))
                 throw new IOException("The source bundle cannot be a conversion destination");
             Check(cancelled, checkpoint);
@@ -171,12 +176,15 @@ namespace DIYLevelFastInit.BundleCodecs
                     List<Block> blocks;
                     using (SHA256 hash = SHA256.Create())
                     {
-                        ChunkOutput sink = new ChunkOutput(output, layout.DataLength, hash, cancelled, checkpoint);
-                        DecodeSource(input, layout, sink, cancelled, checkpoint);
-                        sink.Finish();
-                        hash.TransformFinalBlock(new byte[0], 0, 0);
-                        dataHash = hash.Hash;
-                        blocks = sink.Blocks;
+                        bool parallel = scheduler != null && Path.GetFileName(source).StartsWith("info", StringComparison.OrdinalIgnoreCase);
+                        using (ChunkOutput sink = new ChunkOutput(output, layout.DataLength, hash, cancelled, checkpoint, parallel ? scheduler : null))
+                        {
+                            DecodeSource(input, layout, sink, cancelled, checkpoint);
+                            sink.Finish();
+                            hash.TransformFinalBlock(new byte[0], 0, 0);
+                            dataHash = hash.Hash;
+                            blocks = sink.Blocks;
+                        }
                     }
                     if (blocks.Count != count) throw new IOException("Converted UnityFS block count changed");
                     long length = output.Position;
@@ -525,18 +533,32 @@ namespace DIYLevelFastInit.BundleCodecs
 
         private sealed class ChunkOutput : ForwardStream
         {
+            private sealed class PendingBlock
+            {
+                internal BundleWorkScheduler.Job Job;
+                internal byte[] Plain, Packed;
+                internal int Length, PackedLength;
+            }
+
             private readonly Stream _output;
             private readonly long _limit;
             private readonly SHA256 _hash;
             private readonly Func<bool> _cancelled;
             private readonly Action _checkpoint;
             private readonly byte[] _plain = new byte[ChunkSize], _packed = new byte[ChunkSize + ChunkSize / 255 + 16];
-            private readonly Lz4BlockEncoder _encoder = new Lz4BlockEncoder();
+            private readonly Lz4BlockEncoder _encoder;
+            private readonly BundleWorkScheduler _scheduler;
+            private readonly Queue<PendingBlock> _pending = new Queue<PendingBlock>();
+            private readonly Queue<PendingBlock> _available = new Queue<PendingBlock>();
             private long _written;
             private int _filled;
             internal readonly List<Block> Blocks = new List<Block>();
-            internal ChunkOutput(Stream output, long limit, SHA256 hash, Func<bool> cancelled, Action checkpoint)
-            { _output = output; _limit = limit; _hash = hash; _cancelled = cancelled; _checkpoint = checkpoint; }
+            internal ChunkOutput(Stream output, long limit, SHA256 hash, Func<bool> cancelled, Action checkpoint, BundleWorkScheduler scheduler)
+            {
+                _output = output; _limit = limit; _hash = hash; _cancelled = cancelled; _checkpoint = checkpoint;
+                _scheduler = scheduler;
+                if (scheduler == null) _encoder = new Lz4BlockEncoder();
+            }
             public override bool CanWrite { get { return true; } }
             public override void Write(byte[] buffer, int offset, int count)
             {
@@ -555,16 +577,59 @@ namespace DIYLevelFastInit.BundleCodecs
             {
                 if (_written != _limit) throw new IOException("Truncated decoded output");
                 if (_filled != 0) FlushBlock();
+                while (_pending.Count != 0) WritePending();
             }
             private void FlushBlock()
             {
                 Check(_cancelled, _checkpoint);
+                if (_scheduler != null)
+                {
+                    PendingBlock block = _available.Count != 0 ? _available.Dequeue() : new PendingBlock
+                        { Plain = new byte[ChunkSize], Packed = new byte[ChunkSize + ChunkSize / 255 + 16] };
+                    block.Length = _filled;
+                    Buffer.BlockCopy(_plain, 0, block.Plain, 0, _filled);
+                    block.Job = _scheduler.QueueBlock(delegate
+                    {
+                        Check(_cancelled, null);
+                        block.PackedLength = _scheduler.Encode(block.Plain, block.Length, block.Packed);
+                    });
+                    _pending.Enqueue(block);
+                    _filled = 0;
+                    if (_pending.Count >= _scheduler.WorkerCount * 2) WritePending();
+                    return;
+                }
                 int packed = _encoder.Encode(_plain, _filled, _packed);
                 if (_output.Position > MaxBytes - packed) throw new IOException("Converted bundle exceeds the output limit");
                 _output.Write(_packed, 0, packed);
                 Blocks.Add(new Block { Plain = (uint)_filled, Packed = (uint)packed, Flags = 3 });
                 _filled = 0;
                 Check(_cancelled, _checkpoint);
+            }
+
+            private void WritePending()
+            {
+                PendingBlock block = _pending.Peek();
+                _scheduler.Wait(block.Job, _cancelled);
+                Check(_cancelled, _checkpoint);
+                if (_output.Position > MaxBytes - block.PackedLength) throw new IOException("Converted bundle exceeds the output limit");
+                _output.Write(block.Packed, 0, block.PackedLength);
+                Blocks.Add(new Block { Plain = (uint)block.Length, Packed = (uint)block.PackedLength, Flags = 3 });
+                _pending.Dequeue();
+                block.Job = null;
+                _available.Enqueue(block);
+            }
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing && _scheduler != null)
+                    while (_pending.Count != 0)
+                    {
+                        PendingBlock block = _pending.Dequeue();
+                        try { _scheduler.Wait(block.Job, null); }
+                        catch (Exception) { }
+                    }
+                _available.Clear();
+                base.Dispose(disposing);
             }
         }
 

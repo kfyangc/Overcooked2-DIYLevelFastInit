@@ -343,10 +343,14 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 - Generated independent blocks use HC compression flag `0x03`, never the source's Streamed
   bit `0x40`; the installed Unity's LZ4 stream callbacks fail. A generic parser or
   successful managed conversion does not establish full native Unity acceptance.
-- `InfoBundleOptimizationBatch` owns one cancellable managed worker. Its callbacks
-  only enqueue diagnostics; main-thread Update drains them. Set `InfoFilesPreparing`
-  before cheap initialization and retain it until the worker has fully exited, including
-  coroutine disposal. Never call Unity or BepInEx from the worker.
+- `InfoBundleOptimizationBatch` owns a cancellable coordinator and a fixed CPU worker
+  pool shared by file and info-block jobs. `Loading.MaxConcurrentConversionSets` defaults
+  to 2 (minimum 1), independently of the logical-processor-sized worker budget. Admit
+  one info file per set plus that set's scenes; drain the whole set before admitting
+  its successor. Scenes have no separate quota or intra-file parallelism. Callbacks
+  only enqueue diagnostics; main-thread Update drains them. Retain `InfoFilesPreparing`
+  until every queued/running block and file worker has exited, including disposal.
+  Never call Unity or BepInEx from a worker.
 - Complete this startup phase before any info graph/catalog/preview/native request.
   Keep synchronous `common` initialization and IsInitialized timing unchanged. Do not
   replace files during hot refresh. Early remote DIY messages may use a basename-only
@@ -357,6 +361,9 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   GUID temporary files and unique `original-<GUID>.bundle` / `.record` pairs. Never put
   backup/temp files matching `info*` at the set root. Never overwrite an existing backup.
   Record basenames only with bounded lengths; validate record extents and hashes.
+- New replacements share the old directory guard and take an exclusive lock keyed
+  by the source basename. This allows different files in one set to run concurrently
+  while excluding older processes that take the directory guard exclusively.
 - Use the installed Mono's supported atomic File.Replace with a unique backup. There
   is no truncate/copy-over-source fallback. Recheck source identity/hash under an
   exclusive handle before commit; verify the captured backup and new source afterward.
@@ -381,6 +388,11 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   up to 256 candidate probes and lazy matching. Encode all output blocks as HC, including
   incompressible blocks, to keep all-HC detection idempotent without external receipts.
   Never retain the entire resource payload or clamp the LZMA dictionary.
+- Info blocks use a bounded queue of at most twice the shared worker count per file.
+  Each pool thread owns its encoder; sequential readers own payload hashing and ordered
+  output. Waiting file workers may execute queued blocks/scenes, never another info,
+  so nested work cannot exceed the admitted info limit or deadlock a single worker.
+  Drain block jobs before closing their output stream or releasing replacement guards.
 
 ## Constraints
 
