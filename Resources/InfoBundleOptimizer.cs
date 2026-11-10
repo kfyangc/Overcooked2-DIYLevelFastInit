@@ -24,6 +24,13 @@ namespace DIYLevelFastInit
 
         internal static Result Optimize(string source, Func<bool> cancelled, Action<string> log)
         {
+            long preparedLength, preparedModified;
+            return Optimize(source, cancelled, log, out preparedLength, out preparedModified);
+        }
+
+        internal static Result Optimize(string source, Func<bool> cancelled, Action<string> log, out long preparedLength, out long preparedModified)
+        {
+            preparedLength = preparedModified = 0;
             string converted = null, recordTemporary = null;
             try
             {
@@ -32,8 +39,12 @@ namespace DIYLevelFastInit
                 string directory = WorkDirectory(source);
                 using (FileStream guard = Lock(directory))
                 {
+                    FileInfo initial = new FileInfo(source);
+                    long initialLength = initial.Length, initialModified = initial.LastWriteTimeUtc.Ticks;
                     if (UnityFsRepacker.IsIndependent(source))
                     {
+                        VerifyStampExclusive(source, initialLength, initialModified);
+                        preparedLength = initialLength; preparedModified = initialModified;
                         Log(log, "info bundle already optimized: " + System.IO.Path.GetFileName(source));
                         return Result.AlreadyOptimized;
                     }
@@ -70,6 +81,9 @@ namespace DIYLevelFastInit
                     if (!Commit(source, converted, record.Backup, record.SourceLength, record.SourceHash,
                         record.OutputLength, record.OutputHash, directory, log)) return Result.Failed;
                     converted = null;
+                    long outputModified = File.GetLastWriteTimeUtc(source).Ticks;
+                    VerifyExclusive(source, result.OutputLength, outputModified, result.OutputHash, null);
+                    preparedLength = result.OutputLength; preparedModified = outputModified;
                     Log(log, "info bundle optimized in place: " + source + " (original: " + record.Backup + ")");
                     return Result.Replaced;
                 }
@@ -206,6 +220,13 @@ namespace DIYLevelFastInit
                 if (stream.Length != length || File.GetLastWriteTimeUtc(source).Ticks != ticks || !Same(HashStream(stream, cancelled), hash))
                     throw new IOException("Source info bundle changed before in-place commit");
             }
+        }
+
+        private static void VerifyStampExclusive(string source, long length, long ticks)
+        {
+            using (FileStream stream = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.None))
+                if (stream.Length != length || File.GetLastWriteTimeUtc(source).Ticks != ticks)
+                    throw new IOException("Source level bundle changed during HC readiness check");
         }
 
         private static void CopyStable(string source, string target, Func<bool> cancelled)

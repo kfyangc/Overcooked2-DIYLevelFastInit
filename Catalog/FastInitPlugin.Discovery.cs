@@ -15,6 +15,7 @@ namespace DIYLevelFastInit
         {
             ThumbnailCache.Invalidate();
             Loading = false;
+            if (Instance != null) Instance.EnsureDirectoryPolling();
             FrontendOptionsMenu menu = TryGetMenu();
             if (menu != null)
             {
@@ -132,27 +133,19 @@ namespace DIYLevelFastInit
 
         internal static SetSnapshot ReadSnapshot(DirectoryInfo dir, FileInfo infoFile)
         {
-            SetSnapshot snap = new SetSnapshot();
             try
             {
-                snap.InfoFileName = infoFile.Name;
-                snap.InfoMtimeUtc = infoFile.LastWriteTimeUtc;
-                snap.InfoLength = infoFile.Length;
-                DateTime max = DateTime.MinValue;
-                foreach (FileInfo f in FastInitHost.SafeGetFiles(dir, "*"))
-                {
-                    if (f.LastWriteTimeUtc > max)
-                    {
-                        max = f.LastWriteTimeUtc;
-                    }
-                }
-                snap.DirMaxMtimeUtc = max;
+                SetSnapshot snapshot = LevelDirectorySnapshot.ReadSet(dir, infoFile.Name);
+                snapshot.InfoFileName = infoFile.Name;
+                snapshot.InfoMtimeUtc = infoFile.LastWriteTimeUtc;
+                snapshot.InfoLength = infoFile.Length;
+                return snapshot;
             }
             catch (Exception e)
             {
                 Log.LogDebug("snapshot [" + dir.Name + "]: " + e.Message);
             }
-            return snap;
+            return new SetSnapshot { DirectoryName = dir.Name };
         }
     }
 }

@@ -55,6 +55,10 @@ namespace DIYLevelFastInit
         internal static string InfoOptimizationProgress;
         internal static bool UseDirectCatalogReader = true;
         private static CatalogMetadataRequest _catalogRead;
+        private LevelDirectoryPoller _directoryPoller;
+        private LevelDirectorySnapshot _observedDirectory;
+        private bool _directoryChanged, _directoryScanFailed, _destroying, _refreshRetry;
+        private float _nextAutomaticSync;
 
         private void Awake()
         {
@@ -105,6 +109,8 @@ namespace DIYLevelFastInit
 
         private void OnDestroy()
         {
+            _destroying = true;
+            if (_directoryPoller != null) _directoryPoller.Dispose();
             if (_infoOptimization != null) _infoOptimization.Dispose();
             if (_catalogRead != null) _catalogRead.Dispose();
             OnDemandResources.ResetSaveSelection();
