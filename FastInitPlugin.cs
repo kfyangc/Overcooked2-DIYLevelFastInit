@@ -39,6 +39,7 @@ namespace DIYLevelFastInit
 
         internal static bool Loading;
         internal static bool Syncing;
+        internal static bool QuietDirectoryRefresh;
         internal static int TotalSets;
 
         internal static FastInitPlugin Instance;
@@ -56,6 +57,7 @@ namespace DIYLevelFastInit
         internal static bool UseDirectCatalogReader = true;
         private static CatalogMetadataRequest _catalogRead;
         private LevelDirectoryPoller _directoryPoller;
+        private LevelDirectorySnapshot _notifiedDirectory;
         private LevelDirectorySnapshot _observedDirectory;
         private bool _directoryChanged, _directoryScanFailed, _destroying, _refreshRetry;
         private float _nextAutomaticSync;

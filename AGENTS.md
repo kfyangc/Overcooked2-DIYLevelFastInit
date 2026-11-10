@@ -299,6 +299,12 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   level root and each set's top-level files; compare names, lengths and UTC write ticks
   individually, without hashing/reading bundle payloads or recursing into recovery dirs.
   Unchanged polls never reset previews, rebuild menus or collect unused Unity assets.
+- Gate refresh progress on new set/file-name additions, deletions or renames, not
+  file lengths/timestamps. Keep the last notified entry snapshot separate from the
+  successfully consumed catalog snapshot so failure retries do not flash progress.
+  Silence conversion and subsequent warmup labels for a quiet refresh, while keeping
+  initial discovery and selected-level preparation visible. A final-set removal can
+  still display refresh progress with zero remaining sets.
 - Hot sync diffs `SetSnapshot`s, updates changed entries and restores directory order.
   Changes remain pending during DIY gameplay, transitions and save selection. `Syncing`
   blocks level selection and source previews. Drain native preview/warmup requests,

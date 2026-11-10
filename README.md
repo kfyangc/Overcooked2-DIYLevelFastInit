@@ -4,6 +4,8 @@ Startup and memory optimization for the [OC2DIYLevel](https://github.com/gua248/
 
 [中文说明](README_CN.md)
 
+Level directories are checked every five seconds in the background. Top-right refresh progress appears only for a newly detected addition, deletion or rename of a set or top-level file. Content/timestamp updates and retries of the same change stay silent, including conversion and thumbnail-warmup progress. Initial startup and selected-level loading keep their progress indicators.
+
 ## Version 1.8.0
 
 One DLL supports both OC2DIYLevel 0.10.0 and 0.11.0: the legacy optional-recipe factory hook is kept on 0.10, while 0.11 — where the old factory was removed — detects and hooks `CustomRecipeOptionalRegister.GetOrderDefinitionNode`. Custom recipe nodes, both lookup factories and cloned prefabs remain tracked; results shared across entry points are deduplicated by the existing ownership sets, and the selected optional-recipe target is logged at startup. The plugin display name is now localized.

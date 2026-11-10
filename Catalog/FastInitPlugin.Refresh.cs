@@ -54,6 +54,7 @@ namespace DIYLevelFastInit
         {
             Loading = true;
             Syncing = true;
+            QuietDirectoryRefresh = true;
             bool completed = false;
             try
             {
@@ -71,6 +72,8 @@ namespace DIYLevelFastInit
                 yield return ScanDirectoryForSync(scan);
                 if (scan.Value == null || !RefreshContextIsSafe()) yield break;
                 LevelDirectorySnapshot observed = scan.Value;
+                QuietDirectoryRefresh = observed.SameEntriesAs(_notifiedDirectory);
+                _notifiedDirectory = observed;
                 List<DirectoryInfo> dirs = new List<DirectoryInfo>(observed.Directories);
                 TotalSets = dirs.Count;
                 List<DirectoryInfo> added = new List<DirectoryInfo>();

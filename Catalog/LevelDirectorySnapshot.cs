@@ -70,6 +70,22 @@ namespace DIYLevelFastInit
                 && first.InfoMtimeUtc == second.InfoMtimeUtc;
         }
 
+        internal bool SameEntriesAs(LevelDirectorySnapshot other)
+        {
+            if (other == null || Sets.Count != other.Sets.Count) return false;
+            foreach (KeyValuePair<string, SetSnapshot> pair in Sets)
+            {
+                SetSnapshot previous;
+                if (!other.Sets.TryGetValue(pair.Key, out previous)) return false;
+                SetSnapshot current = pair.Value;
+                if (current.DirectoryName != previous.DirectoryName || current.Files == null || previous.Files == null
+                    || current.Files.Length != previous.Files.Length) return false;
+                for (int i = 0; i < current.Files.Length; i++)
+                    if (current.Files[i].Name != previous.Files[i].Name) return false;
+            }
+            return true;
+        }
+
         internal static bool SameSet(SetSnapshot first, SetSnapshot second)
         {
             if (first == null || second == null || first.DirectoryName != second.DirectoryName || !SameInfo(first, second)

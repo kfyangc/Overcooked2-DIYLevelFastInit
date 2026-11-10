@@ -15,6 +15,7 @@ namespace DIYLevelFastInit
             try
             {
                 _observedDirectory = new LevelDirectorySnapshot(new DirectoryInfo[0], Snapshots);
+                _notifiedDirectory = _observedDirectory;
                 _directoryPoller = new LevelDirectoryPoller(Path.Combine(GetDiyPluginDir(), "levels"));
                 Log.LogInfo("automatic level refresh: checking shallow directory metadata every 5 seconds");
             }

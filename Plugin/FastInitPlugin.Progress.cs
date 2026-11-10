@@ -11,10 +11,11 @@ namespace DIYLevelFastInit
 
         private void OnGUI()
         {
-            bool catalogLoading = Loading && TotalSets > 0;
-            string infoPreparing = InfoOptimizationProgress;
+            bool catalogLoading = !QuietDirectoryRefresh && Loading && (Syncing || TotalSets > 0);
+            string infoPreparing = QuietDirectoryRefresh ? null : InfoOptimizationProgress;
             string levelLoading = OnDemandResources.LevelLoadProgress;
-            bool thumbnails = OnDemandResources.WarmingThumbnails && !OnDemandResources.IsTransitioning && !PseudoPrefabManager.isInCustomLevel;
+            bool thumbnails = !QuietDirectoryRefresh && OnDemandResources.WarmingThumbnails
+                && !OnDemandResources.IsTransitioning && !PseudoPrefabManager.isInCustomLevel;
             if (!catalogLoading && !thumbnails && levelLoading == null && infoPreparing == null)
             {
                 return;
@@ -32,7 +33,7 @@ namespace DIYLevelFastInit
                 int done = (infos != null) ? infos.Count : 0;
                 string text = infoPreparing != null ? "DIY info " + infoPreparing
                     : levelLoading != null ? "DIY level preparing " + levelLoading
-                    : catalogLoading ? "DIY levels loading " + done + "/" + TotalSets
+                    : catalogLoading ? (Syncing ? "DIY levels refreshing" : "DIY levels loading " + done + "/" + TotalSets)
                     : "DIY previews caching " + OnDemandResources.ThumbnailDone + "/" + OnDemandResources.ThumbnailTotal;
                 Rect rect = new Rect(Screen.width - 336, 6, 330, 26);
                 _progressStyle.normal.textColor = Color.black;
