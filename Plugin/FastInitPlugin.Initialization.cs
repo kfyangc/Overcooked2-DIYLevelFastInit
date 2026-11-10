@@ -13,6 +13,7 @@ namespace DIYLevelFastInit
         // Harmony prefix: returns false to skip the original Initialize and run ours instead.
         private static bool InitializePrefix()
         {
+            if (ResourceFailures.FailureGate.Active) return false;
             if (_started)
             {
                 // The original has no idempotence guard: a second ByteLoad would reload

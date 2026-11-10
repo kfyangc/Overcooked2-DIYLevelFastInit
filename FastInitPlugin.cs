@@ -61,6 +61,7 @@ namespace DIYLevelFastInit
         private LevelDirectorySnapshot _observedDirectory;
         private bool _directoryChanged, _directoryScanFailed, _destroying, _refreshRetry;
         private float _nextAutomaticSync;
+        private ResourceFailures.ResourceFailureBlocker _resourceFailureBlocker;
 
         private void Awake()
         {
@@ -93,6 +94,7 @@ namespace DIYLevelFastInit
                 OnDemandResources.Install(harmony);
                 _patchesReady = true;
                 ConfigureBundleCache();
+                _resourceFailureBlocker = ResourceFailures.ResourceFailureBlocker.Create();
                 Log.LogInfo("DIYLevel FastInit ready: lightweight catalog, on-demand level resources.");
             }
             catch (Exception e)
@@ -113,6 +115,7 @@ namespace DIYLevelFastInit
         {
             _destroying = true;
             if (_directoryPoller != null) _directoryPoller.Dispose();
+            if (_resourceFailureBlocker != null) _resourceFailureBlocker.Dispose();
             if (_infoOptimization != null) _infoOptimization.Dispose();
             if (_catalogRead != null) _catalogRead.Dispose();
             OnDemandResources.ResetSaveSelection();

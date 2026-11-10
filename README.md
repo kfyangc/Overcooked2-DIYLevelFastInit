@@ -6,6 +6,8 @@ Startup and memory optimization for the [OC2DIYLevel](https://github.com/gua248/
 
 ## Version 1.9.0
 
+[Release notes for review](RELEASE_NOTES.md)
+
 Level directories are checked every five seconds on one background worker using shallow file metadata. Changes are applied safely in the frontend, including HC conversion of newly added or changed UnityFS bundles such as `custom_recipes`. Gameplay, transitions and save selection defer refresh. Top-right refresh progress appears only for a new addition, deletion or rename of a set or top-level file; content/timestamp updates and retries of the same change stay silent. Initial startup and selected-level loading keep their progress indicators.
 
 ### Source bundle conversion
@@ -25,6 +27,19 @@ Parallel HC encoding follows the native 128 KiB output-block boundary, regardles
 `Loading.ConversionMemoryBudgetMiB=800` controls estimated conversion reservations (16–2048 MiB; restart required). Each file reserves the larger of its disk size and an estimate of decoder dictionaries/models, metadata, bounded block buffers and encoder state, with allocation slack. The coordinator reserves this amount before queueing and pauses admission until completed, failed or cancelled jobs release enough capacity. Reservations cover queued and running files through validation/replacement and block draining. All files and blocks share one CPU pool sized to the logical processor count. Pending blocks remain bounded to twice that count per file. There is no level-set quota; the old `MaxConcurrentConversionSets` setting is ignored.
 
 Files larger than the budget on disk can stream exclusively, reserving the whole budget if their estimated working buffers fit. When parallel buffers would exceed the budget, that file falls back to serial encoding. If even its serial working estimate cannot fit, it is reported and retained rather than waiting indefinitely. This budget is an estimate for conversion admission, not a hard limit on the game's total memory, native allocations or managed heap. A source-specific replacement lock still permits different files in one set while excluding concurrent replacement of the same file and remaining compatible with the old directory lock.
+### Resource read failure handling
+
+Integrates the ResourceReadFailureBlocker source provided by Github@CH3NGY2 into FastInit's lifecycle and main-thread update. A required template or recipe resource failure that breaks configuration building stops the failed DIY entry/save-ready flow, cancels pending FastInit preparation, closes its failed save dialog and shows the level, resource and exception in a native game error dialog. Confirming the error permits a new selection once the old save dialog has closed. Tolerated optional null assets do not activate the gate; original exceptions and logs remain intact. FastInit preparation errors also produce queued notices, coalescing duplicate reports for the same level.
+
+The same DLL supports OC2DIYLevel 0.10.0 and 0.11.0, selecting resource-descriptor overloads explicitly on 0.11. Typed resource loads are observed at non-generic call sites while preserving the original `LoadAsset<T>` type argument. Closed generic loader bodies receive no Harmony patches, avoiding type confusion in the game's shared Mono generic code.
+
+Notices coalesce repeated errors within one load attempt. Selecting the same level again can show its new failure. At most five notices wait in the queue; there is no session-wide limit on how many errors can be shown.
+
+Runtime helper exceptions retain their original exception and diagnostic log without independently blocking the level. Load failure handling requires a failure escaping configuration building or resource preparation. Dialogs display the recorded exception type and reason.
+
+Before testing, move the standalone ResourceReadFailureBlocker DLL out of `BepInEx/plugins` (including `OC2DIYLevel-ResourceReadFailureBlocker-选档空白修复.dll`) and restart the game. The old plugin would still install its own patches; FastInit logs a warning if it is present. Replace only the FastInit DLL; no OC2DIYLevel DLL changes are needed. Dialogs support Simplified/Traditional Chinese, English, Japanese and Korean, with English fallback for other game languages. Detailed session logs are under `BepInEx/logs/oc2.diylevel.fastinit.resource-failures/`, retaining at most 20 files.
+
+This handles failed resource reads; it does not repair map content or OC2DIYLevel object implementations. Offline checks cover both versions' patch installation, type arguments, exception propagation and entry gates. Native UI, young levels and multiplayer behavior still require gameplay testing.
 
 ## Version 1.8.0
 
