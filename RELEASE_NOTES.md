@@ -1,8 +1,9 @@
 ## 中文
 
-测试版 `1.9.1.2`：调整脏盘整体销毁流程，并保留关卡目录、资源转换与加载失败处理。
+测试版 `1.9.1.3`：继续修正洗碗数量，保留当前脏盘销毁路径与原有加载功能。
 
-- 撤回未解决实机问题的洗碗池数量封顶方案。针对原版递归销毁消息固定 16 项数组导致的异常，整摞脏盘改走原版单对象销毁消息，由客户端连同子盘子一起销毁。只需房主安装，原生操作与“举子的晚宴1”的实机效果尚待验证。
+- 仅在洗碗池服务端的加入／洗完事件发送兼容数量，保留真实计数，避免剩余 16 个时被客户端读成 0。未恢复旧全局序列化补丁，只需房主安装。“举子的晚宴1”的完整洗碗与拿放行为仍待实机验证。
+- 用户确认脏盘复制由 `52f7063` 引入，原版没有这一现象；此前离线模拟不能作为原版存在该游戏行为的证据。
 - 后台约每 5 秒检查关卡目录，发现变化后自动刷新并转换新增或变化的资源包；只有新增、删除或重命名时显示右上角刷新进度。游戏中、切图或选档期间延后处理。
 - 将 `info_*`、`s_*`等兼容资源包统一转为 LZ4HC；旧版普通 LZ4 包也可转换，已有 HC 包直接跳过。
 - 支持多文件及文件内分块并行，按估算内存预算调度。`Loading.ConversionMemoryBudgetMiB` 默认 800 MiB，可配置；该预算用于转换任务，不是游戏总内存的硬限制。
@@ -20,9 +21,10 @@
 
 ## English
 
-Test build `1.9.1.2`: revises whole dirty-stack destruction while retaining catalog refresh, bundle conversion and resource-failure handling.
+Test build `1.9.1.3`: revises sink count events while retaining current dirty-stack destruction and loading features.
 
-- Withdraws the outgoing sink-count clamp after failed gameplay feedback. Whole dirty stacks use the original single-entity destruction message, avoiding the recursive message's fixed 16-element descendant array and destroying child plates with the root. Only the host needs this update; native input and the reported custom level remain untested.
+- Sends bounded counts only from the sink server's add/cleaned events, retaining the true count and preventing a remaining count of 16 from being read as zero. Does not restore the old global serializer patch. Only the host needs the update; complete washing and stack placement in the reported level remain untested.
+- The user confirms that `52f7063` introduced dirty-plate duplication and that the original game did not show it; the earlier isolated model is not evidence of that vanilla gameplay behavior.
 - Checks level directories in the background roughly every five seconds, refreshing the catalog and converting added or changed bundles when needed. Refresh progress appears only for additions, deletions or renames. Changes wait during gameplay, transitions and save selection.
 - Converts compatible bundles such as `info_*` and `s_*` to LZ4HC. Ordinary LZ4 bundles from older versions can also be converted; existing HC bundles are skipped.
 - Supports parallel files and block encoding within a file, scheduled against an estimated memory budget. `Loading.ConversionMemoryBudgetMiB` defaults to 800 MiB and is configurable; it controls conversion tasks, not total game memory.

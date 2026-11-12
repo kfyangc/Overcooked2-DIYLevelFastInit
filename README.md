@@ -4,11 +4,19 @@ Startup and memory optimization for the [OC2DIYLevel](https://github.com/gua248/
 
 [中文说明](README_CN.md)
 
+## Version 1.9.1.3 (test build)
+
+Addresses the report that putting 20 dirty plates in a sink yields only four clean plates. Retains the current dirty-stack destruction path and sends separate count messages only from the sink server's `SendAddPlates` and `SendCleanedPlate` methods. The authoritative count remains exact; the advertised count is bounded at 15 and reaches zero only when all plates are washed. Original serializers and readers are unchanged, so clients do not need this update.
+
+Does not restore the global serializer patch from `52f7063`. The user confirms that the original game did not duplicate dirty plates and that this test commit introduced the regression. The isolated model did not establish equivalent vanilla gameplay behavior. `4fc3e03` both withdrew that patch and changed destruction; its reported absence of duplication does not isolate which change removed the regression.
+
+Offline checks cover original server washing updates, original client event handling and interaction state with the current patch combination. Unity native objects and input boundaries remain modeled, so gameplay success in the reported level is not established.
+
 ## Version 1.9.1.2 (test build)
 
 Withdraws the previous test patch's outgoing sink-count clamp. The user reported no improvement and large dirty-stack increases after picking up and placing plates at the return station in a single-player custom level. The earlier serialization checks did not cover actual stack merging and destruction and did not establish a gameplay fix.
 
-Targets a separately reproduced original defect: the recursive destruction message copies descendant IDs into a fixed 16-element array and throws above that capacity. Stack merging adds destination plates before destroying the source, so failed destruction can leave the source available for repeated additions. Whole dirty stacks now use the original `DestroyEntity` message, which destroys their children with the root on the client. Other objects retain recursive destruction. Only the host needs the update; sink-count messages are unchanged.
+This test both withdrew the clamp and routed whole dirty stacks through the original `DestroyEntity` message, destroying their children with the root. Other objects retain recursive destruction. The recursive message's fixed 16-element array exception can be reproduced in isolation, but this did not establish dirty-plate duplication in the user's original game. The user reported no duplication with this commit, while a 20-plate sink still yielded only four clean plates.
 
 Offline checks use the game's bundled Mono, actual DLL and production Harmony hook, covering the original capacity exception, merge/consumption conservation, the original client destruction entry point and unpatching. Native input and the reported level remain untested.
 
