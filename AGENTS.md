@@ -2,7 +2,7 @@
 
 BepInEx 5 plugin (net35) that patches
 [OC2DIYLevel](https://github.com/gua248/Overcooked2-LevelEditor) 0.10.0 and 0.11.0 for Overcooked! 2.
-Version 1.9.1 keeps a complete lightweight level catalog while loading info resources
+Version 1.9.2 keeps a complete lightweight level catalog while loading info resources
 and building configurations only for the selected level. Async discovery, menu healing,
 the progress indicator, and incremental hot reload remain supported.
 
@@ -13,7 +13,7 @@ the progress indicator, and incremental hot reload remain supported.
 - `Catalog/`: metadata models, disk/scene caches, direct serialized metadata reading,
   discovery and incremental refresh.
 - `Frontend/`: menu rebuilding, save-dialog hooks and confirmed save-choice state.
-- `Networking/`: copied client load requests and the remote entry gate.
+- `Networking/`: copied client load requests, the remote entry gate, whole dirty-stack destruction and sink count events.
 - `Resources/`: shared state/hook registration, info bundles, level preparation,
   configuration ownership, lifetime cleanup, Qichi and info dependency adapters.
 - `ResourceFailures/`: integrated, attributed ResourceReadFailureBlocker observers,
@@ -79,6 +79,20 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 
 ## Architecture
 
+- `DirtyPlateStackDestroyFix` routes only dirty-stack roots from
+  `ServerMessenger.DestroyEntities` to the original `DestroyEntity`. Dirty child
+  plates are consumed with their stack and must not be detached/resumed. This avoids
+  the recursive message's fixed 16-element array without changing client protocols
+  or other objects' destruction. User feedback attributes duplication to the earlier
+  `52f7063` test, not to vanilla gameplay; do not treat the isolated destruction model
+  as proof of a vanilla duplication bug. `4fc3e03` did not duplicate in their test but
+  still washed only four of 20 plates.
+- `WashingStationCountEvents` replaces only `ServerWashingStation.SendAddPlates` and
+  `SendCleanedPlate`, sending fresh messages with a wire count at most 15 while the
+  authoritative field remains exact. Never restore the global serializer transpiler
+  from `52f7063`. Keep original serializers/readers and interaction-state events.
+  Verify the full server-update/client-interaction washing loop, not just encoding.
+  Offline native boundary stubs do not establish success in the reported custom level.
 - Harmony prefix on `DIYLevelAssetBundleManager.Initialize` skips the original:
   `RunCheapInit` synchronously prepares `common`, static fields and DLC data, while
   `FastInitHost` loads the remaining `common*` dependencies in the background.
@@ -521,6 +535,11 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   the scene-instance dictionary key.
 
 ## Publishing rule
+
+Test builds append an incrementing fourth component to the latest approved release
+version. The approved release is `1.9.2`, so subsequent tests use `1.9.2.x`.
+Changing the three-component release version requires the user's explicit approval.
+Keep historical test commits under their original test versions.
 
 Commit each version independently after implementation and relevant checks, before
 starting the next version. Do not include version numbers in commit subjects or bodies;

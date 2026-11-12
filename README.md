@@ -4,6 +4,16 @@ Startup and memory optimization for the [OC2DIYLevel](https://github.com/gua248/
 
 [中文说明](README_CN.md)
 
+## Version 1.9.2
+
+[Release notes](RELEASE_NOTES.md)
+
+Fixes clients stopping washing early above 15 dirty plates, such as a sink with 20 plates yielding only four clean plates. The host retains the true count and advertises at most 15 in add/cleaned events, sending zero only after all plates are washed. Only the host needs this update; clients do not need to update FastInit. The original wire format, decoding and interaction-state messages remain compatible.
+
+Whole dirty stacks use the original single-entity destruction message, destroying their child plates with the root and avoiding the recursive message's fixed descendant array. Other objects retain their existing destruction path.
+
+The Release build and offline checks on the game's bundled Mono pass, covering selected count boundaries from 1 to 255, mid-wash additions, washing all plates and a separate guest process with no FastInit loaded. The original guest retains interaction until the true count reaches zero. Unity native objects, input and scenes are modeled; real multiplayer, in-level placement and plate spawning still require gameplay verification.
+
 ## Version 1.9.0
 
 [Release notes for review](RELEASE_NOTES.md)
