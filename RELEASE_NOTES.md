@@ -1,8 +1,8 @@
 ## 中文
 
-修复洗碗池数量溢出，自动刷新关卡目录，扩展 LZ4HC 转换，并整合资源加载失败提示。
+测试版 `1.9.1.2`：调整脏盘整体销毁流程，并保留关卡目录、资源转换与加载失败处理。
 
-- 修复洗碗池超过 15 个脏盘后显示消失、数量错误或洗碗提前中断的问题。房主保留全部脏盘，只将发给客户端的数量封顶为 15；队友无需安装本更新。消息格式保持原版，原生交互与实机联机尚未验证。
+- 撤回未解决实机问题的洗碗池数量封顶方案。针对原版递归销毁消息固定 16 项数组导致的异常，整摞脏盘改走原版单对象销毁消息，由客户端连同子盘子一起销毁。只需房主安装，原生操作与“举子的晚宴1”的实机效果尚待验证。
 - 后台约每 5 秒检查关卡目录，发现变化后自动刷新并转换新增或变化的资源包；只有新增、删除或重命名时显示右上角刷新进度。游戏中、切图或选档期间延后处理。
 - 将 `info_*`、`s_*`等兼容资源包统一转为 LZ4HC；旧版普通 LZ4 包也可转换，已有 HC 包直接跳过。
 - 支持多文件及文件内分块并行，按估算内存预算调度。`Loading.ConversionMemoryBudgetMiB` 默认 800 MiB，可配置；该预算用于转换任务，不是游戏总内存的硬限制。
@@ -20,9 +20,9 @@
 
 ## English
 
-Fixes sink count overflow, automatically refreshes the level catalog, expands LZ4HC conversion and integrates resource-load failure notices.
+Test build `1.9.1.2`: revises whole dirty-stack destruction while retaining catalog refresh, bundle conversion and resource-failure handling.
 
-- Fixes dirty plates appearing to disappear, incorrect counts and premature washing interruption above 15 plates. The host retains every plate and caps only the outgoing count at 15; clients do not need this update. The original message format is preserved; native interaction and live multiplayer remain untested.
+- Withdraws the outgoing sink-count clamp after failed gameplay feedback. Whole dirty stacks use the original single-entity destruction message, avoiding the recursive message's fixed 16-element descendant array and destroying child plates with the root. Only the host needs this update; native input and the reported custom level remain untested.
 - Checks level directories in the background roughly every five seconds, refreshing the catalog and converting added or changed bundles when needed. Refresh progress appears only for additions, deletions or renames. Changes wait during gameplay, transitions and save selection.
 - Converts compatible bundles such as `info_*` and `s_*` to LZ4HC. Ordinary LZ4 bundles from older versions can also be converted; existing HC bundles are skipped.
 - Supports parallel files and block encoding within a file, scheduled against an estimated memory budget. `Loading.ConversionMemoryBudgetMiB` defaults to 800 MiB and is configurable; it controls conversion tasks, not total game memory.

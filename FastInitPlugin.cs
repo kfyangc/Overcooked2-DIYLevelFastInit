@@ -20,7 +20,7 @@ namespace DIYLevelFastInit
     {
         public const string PluginGuid = "oc2.diylevel.fastinit";
         public const string PluginName = "DIYLevel 快速载入 / DIYLevel 启动速度优化 / DIYLevel FastInit";
-        public const string PluginVersion = "1.9.1.1";
+        public const string PluginVersion = "1.9.1.2";
 
         internal static ManualLogSource Log;
 
@@ -92,8 +92,8 @@ namespace DIYLevelFastInit
                 harmony.Patch(AccessTools.Method(typeof(DIYLevelAssetBundleManager), "SetupSceneDirectoryData"),
                     prefix: new HarmonyMethod(typeof(FastInitPlugin), nameof(SetupDirectoryPrefix)));
                 OnDemandResources.Install(harmony);
-                WashingStationCountFix.Install(harmony);
-                Log.LogInfo("washing station count fix ready: server keeps all plates; outgoing count capped at 15 for vanilla clients.");
+                DirtyPlateStackDestroyFix.Install(harmony);
+                Log.LogInfo("dirty plate stack destruction fix ready: whole-stack DestroyEntity messages; original sink counts preserved (experimental).");
                 _patchesReady = true;
                 ConfigureBundleCache();
                 _resourceFailureBlocker = ResourceFailures.ResourceFailureBlocker.Create();
@@ -116,7 +116,7 @@ namespace DIYLevelFastInit
         private void OnDestroy()
         {
             _destroying = true;
-            if (_patchesReady) WashingStationCountFix.Uninstall();
+            if (_patchesReady) DirtyPlateStackDestroyFix.Uninstall();
             if (_directoryPoller != null) _directoryPoller.Dispose();
             if (_resourceFailureBlocker != null) _resourceFailureBlocker.Dispose();
             if (_infoOptimization != null) _infoOptimization.Dispose();

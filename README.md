@@ -4,11 +4,13 @@ Startup and memory optimization for the [OC2DIYLevel](https://github.com/gua248/
 
 [中文说明](README_CN.md)
 
-## Version 1.9.1.1
+## Version 1.9.1.2 (test build)
 
-Fixes sink counts overflowing above 15 dirty plates by default. The original four-bit count turns 16 into 0 and 20 into 4, potentially disabling client interaction before washing finishes. The host retains the actual count and caps only the outgoing value at 15; counts below 15 are sent exactly, and zero is sent only when the sink is empty. The original message format is preserved, so only the host needs this update and unmodified clients can continue washing. Applies to native sinks in both official and DIY levels.
+Withdraws the previous test patch's outgoing sink-count clamp. The user reported no improvement and large dirty-stack increases after picking up and placing plates at the return station in a single-player custom level. The earlier serialization checks did not cover actual stack merging and destruction and did not establish a gameplay fix.
 
-Offline checks use the game's bundled Mono, actual game DLL and this patch's Harmony hook, covering the original reader, message reuse, count boundaries and unpatching. Native interaction and live multiplayer remain untested.
+Targets a separately reproduced original defect: the recursive destruction message copies descendant IDs into a fixed 16-element array and throws above that capacity. Stack merging adds destination plates before destroying the source, so failed destruction can leave the source available for repeated additions. Whole dirty stacks now use the original `DestroyEntity` message, which destroys their children with the root on the client. Other objects retain recursive destruction. Only the host needs the update; sink-count messages are unchanged.
+
+Offline checks use the game's bundled Mono, actual DLL and production Harmony hook, covering the original capacity exception, merge/consumption conservation, the original client destruction entry point and unpatching. Native input and the reported level remain untested.
 
 ## Version 1.9.0
 
