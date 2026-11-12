@@ -2,7 +2,7 @@
 
 BepInEx 5 plugin (net35) that patches
 [OC2DIYLevel](https://github.com/gua248/Overcooked2-LevelEditor) 0.10.0 and 0.11.0 for Overcooked! 2.
-Version 1.9.1 keeps a complete lightweight level catalog while loading info resources
+Version 1.9.1.1 keeps a complete lightweight level catalog while loading info resources
 and building configurations only for the selected level. Async discovery, menu healing,
 the progress indicator, and incremental hot reload remain supported.
 
@@ -13,7 +13,7 @@ the progress indicator, and incremental hot reload remain supported.
 - `Catalog/`: metadata models, disk/scene caches, direct serialized metadata reading,
   discovery and incremental refresh.
 - `Frontend/`: menu rebuilding, save-dialog hooks and confirmed save-choice state.
-- `Networking/`: copied client load requests and the remote entry gate.
+- `Networking/`: copied client load requests, the remote entry gate and the host-compatible sink count fix.
 - `Resources/`: shared state/hook registration, info bundles, level preparation,
   configuration ownership, lifetime cleanup, Qichi and info dependency adapters.
 - `ResourceFailures/`: integrated, attributed ResourceReadFailureBlocker observers,
@@ -79,6 +79,11 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 
 ## Architecture
 
+- `WashingStationCountFix` inserts a clamp after the outgoing count field load in
+  `WashingStationMessage.Serialise`, validating the original four-bit write first.
+  Keep authoritative server/message counts intact and the original reader/format
+  unchanged. Only the host needs the fix; positive counts above 15 are represented
+  as 15 until washing finishes. Remove this transpiler on plugin shutdown.
 - Harmony prefix on `DIYLevelAssetBundleManager.Initialize` skips the original:
   `RunCheapInit` synchronously prepares `common`, static fields and DLC data, while
   `FastInitHost` loads the remaining `common*` dependencies in the background.

@@ -4,6 +4,12 @@ Startup and memory optimization for the [OC2DIYLevel](https://github.com/gua248/
 
 [中文说明](README_CN.md)
 
+## Version 1.9.1.1
+
+Fixes sink counts overflowing above 15 dirty plates by default. The original four-bit count turns 16 into 0 and 20 into 4, potentially disabling client interaction before washing finishes. The host retains the actual count and caps only the outgoing value at 15; counts below 15 are sent exactly, and zero is sent only when the sink is empty. The original message format is preserved, so only the host needs this update and unmodified clients can continue washing. Applies to native sinks in both official and DIY levels.
+
+Offline checks use the game's bundled Mono, actual game DLL and this patch's Harmony hook, covering the original reader, message reuse, count boundaries and unpatching. Native interaction and live multiplayer remain untested.
+
 ## Version 1.9.0
 
 [Release notes for review](RELEASE_NOTES.md)
