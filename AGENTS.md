@@ -2,7 +2,7 @@
 
 BepInEx 5 plugin (net35) that patches
 [OC2DIYLevel](https://github.com/gua248/Overcooked2-LevelEditor) 0.10.0 and 0.11.0 for Overcooked! 2.
-Test version 1.9.1.3 keeps a complete lightweight level catalog while loading info resources
+Version 1.9.2 keeps a complete lightweight level catalog while loading info resources
 and building configurations only for the selected level. Async discovery, menu healing,
 the progress indicator, and incremental hot reload remain supported.
 
@@ -536,7 +536,10 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 
 ## Publishing rule
 
-Use `1.9.1.x` for test builds until the user approves a release version.
+Test builds append an incrementing fourth component to the latest approved release
+version. The approved release is `1.9.2`, so subsequent tests use `1.9.2.x`.
+Changing the three-component release version requires the user's explicit approval.
+Keep historical test commits under their original test versions.
 
 Commit each version independently after implementation and relevant checks, before
 starting the next version. Do not include version numbers in commit subjects or bodies;

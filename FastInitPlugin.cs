@@ -20,7 +20,7 @@ namespace DIYLevelFastInit
     {
         public const string PluginGuid = "oc2.diylevel.fastinit";
         public const string PluginName = "DIYLevel 快速载入 / DIYLevel 启动速度优化 / DIYLevel FastInit";
-        public const string PluginVersion = "1.9.1.3";
+        public const string PluginVersion = "1.9.2";
 
         internal static ManualLogSource Log;
 
@@ -94,7 +94,7 @@ namespace DIYLevelFastInit
                 OnDemandResources.Install(harmony);
                 DirtyPlateStackDestroyFix.Install(harmony);
                 WashingStationCountEvents.Install(harmony);
-                Log.LogInfo("dirty stack destruction and sink count events ready: host count preserved; original serializers unchanged (experimental).");
+                Log.LogInfo("dirty stack destruction and sink count events ready: host count preserved; original serializers unchanged.");
                 _patchesReady = true;
                 ConfigureBundleCache();
                 _resourceFailureBlocker = ResourceFailures.ResourceFailureBlocker.Create();
