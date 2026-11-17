@@ -4,6 +4,12 @@
 
 [English README](README.md)
 
+## 1.9.3
+
+[发布说明](RELEASE_NOTES.md)
+
+安装补丁前检测旧版 GUID（`yang.oc2.diylevel.fastinit`）。检测到旧版 DIYLevel 快速载入（启动速度优化）时，本次启动停用新版，并通过游戏原生弹窗显示旧版 DLL 的完整路径，提示退出游戏、卸载旧版后重启。
+
 ## 1.9.2
 
 [发布说明](RELEASE_NOTES.md)

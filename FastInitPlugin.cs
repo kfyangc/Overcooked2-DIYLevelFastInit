@@ -16,11 +16,12 @@ namespace DIYLevelFastInit
     [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
     [BepInProcess("Overcooked2.exe")]
     [BepInDependency("dev.gua.overcooked.diylevel")]
+    [BepInDependency(LegacyPluginConflict.LegacyGuid, BepInDependency.DependencyFlags.SoftDependency)]
     public partial class FastInitPlugin : BaseUnityPlugin
     {
         public const string PluginGuid = "oc2.diylevel.fastinit";
         public const string PluginName = "DIYLevel 快速载入 / DIYLevel 启动速度优化 / DIYLevel FastInit";
-        public const string PluginVersion = "1.9.2";
+        public const string PluginVersion = "1.9.3";
 
         internal static ManualLogSource Log;
 
@@ -62,10 +63,13 @@ namespace DIYLevelFastInit
         private bool _directoryChanged, _directoryScanFailed, _destroying, _refreshRetry;
         private float _nextAutomaticSync;
         private ResourceFailures.ResourceFailureBlocker _resourceFailureBlocker;
+        private LegacyPluginConflict _legacyConflict;
 
         private void Awake()
         {
             Log = Logger;
+            _legacyConflict = LegacyPluginConflict.Detect();
+            if (_legacyConflict != null) return;
             Instance = this;
             MethodInfo original = AccessTools.Method(typeof(DIYLevelAssetBundleManager), "Initialize");
             if (original == null)
@@ -116,6 +120,7 @@ namespace DIYLevelFastInit
 
         private void OnDestroy()
         {
+            if (_legacyConflict != null) return;
             _destroying = true;
             if (_patchesReady)
             {

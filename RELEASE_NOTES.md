@@ -1,3 +1,19 @@
+# 1.9.3
+
+## 中文
+
+新增旧版 DIYLevel 快速载入（启动速度优化）检测，避免更换 GUID 前后的版本同时安装补丁。
+
+- 启动时检测旧 GUID `yang.oc2.diylevel.fastinit`，检测到后停用新版补丁。
+- 复用游戏原生弹窗，显示旧版 DLL 完整路径，提示退出游戏、卸载旧版后重启。
+
+## English
+
+Detects legacy DIYLevel FastInit installations to prevent duplicate hooks from versions using different GUIDs.
+
+- Checks the legacy GUID `yang.oc2.diylevel.fastinit` at startup and disables the new version's hooks when found.
+- Shows the old DLL's full path in a native game dialog, asking the player to exit, uninstall that DLL and restart.
+
 # 1.9.2
 
 ## 中文

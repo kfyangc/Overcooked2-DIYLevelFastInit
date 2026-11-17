@@ -4,6 +4,12 @@ Startup and memory optimization for the [OC2DIYLevel](https://github.com/gua248/
 
 [中文说明](README_CN.md)
 
+## Version 1.9.3
+
+[Release notes](RELEASE_NOTES.md)
+
+Detects the legacy FastInit GUID (`yang.oc2.diylevel.fastinit`) before installing hooks. If the old plugin is present, the new version stays inactive and a native game dialog shows the old DLL path. Exit the game, uninstall that old DLL, then restart.
+
 ## Version 1.9.2
 
 [Release notes](RELEASE_NOTES.md)
