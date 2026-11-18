@@ -77,7 +77,7 @@ namespace DIYLevelFastInit
             AssetBundle commonBundle = AssetBundle.LoadFromFile(commonPath);
             FiCover.SetValue(null, commonBundle.LoadAsset<Sprite>("diylevelcover"));
             FiSessionPrefab.SetValue(null, commonBundle.LoadAsset<GameObject>("DIYLevelGameSession"));
-            FiConfigSo.SetValue(null, commonBundle.LoadAsset<PseudoPrefabSO>("LevelConfigTemplateSO"));
+            LevelConfigFactory.InitializeTemplates(commonBundle);
             FiCommonBundle.SetValue(null, commonBundle);
 
             DIYLevelAssetBundleManager.levelSetInfos = new List<KeyValuePair<string, LevelSetInfoSO>>();

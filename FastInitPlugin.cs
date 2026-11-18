@@ -21,7 +21,7 @@ namespace DIYLevelFastInit
     {
         public const string PluginGuid = "oc2.diylevel.fastinit";
         public const string PluginName = "DIYLevel 快速载入 / DIYLevel 启动速度优化 / DIYLevel FastInit";
-        public const string PluginVersion = "1.9.3";
+        public const string PluginVersion = "1.9.3.1";
 
         internal static ManualLogSource Log;
 
@@ -80,6 +80,7 @@ namespace DIYLevelFastInit
             Harmony harmony = new Harmony(PluginGuid);
             try
             {
+                LevelConfigFactory.Validate();
                 harmony.Patch(original, prefix: new HarmonyMethod(typeof(FastInitPlugin), nameof(InitializePrefix)));
                 // The original builds the level-set button list only when the menu is first
                 // created (if (menu != null) return), so sets that finish loading later never

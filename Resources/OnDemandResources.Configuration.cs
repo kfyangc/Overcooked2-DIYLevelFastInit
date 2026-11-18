@@ -1,6 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
+using System.Reflection.Emit;
+using HarmonyLib;
 using LevelEditorStub;
 using OC2DIYLevel;
 using UnityEngine;
@@ -76,7 +79,7 @@ namespace DIYLevelFastInit
             try
             {
                 if (variant.LevelConfig == null)
-                    variant.LevelConfig = LevelConfigSetup.SetupConfig(FastInitPlugin.FiConfigSo.GetValue(null) as PseudoPrefabSO, full, variant.PlayerCount);
+                    variant.LevelConfig = LevelConfigFactory.Create(full, variant.PlayerCount);
                 variant.Screenshot = full.screenshot;
             }
             finally { _directoryBuild = false; }
@@ -96,6 +99,25 @@ namespace DIYLevelFastInit
             Record(__result.m_recipeMatchingList);
             // SetupConfig clones only the first round's recipe list; other rounds may share assets.
             if (__result.m_rounds.Length != 0) Record(__result.m_rounds[0].m_recipes);
+        }
+
+        private static IEnumerable<CodeInstruction> TrackConfigAllocations(IEnumerable<CodeInstruction> instructions)
+        {
+            MethodInfo record = AccessTools.Method(typeof(OnDemandResources), nameof(Record));
+            foreach (CodeInstruction instruction in instructions)
+            {
+                yield return instruction;
+                MethodInfo method = instruction.operand as MethodInfo;
+                if (instruction.opcode != OpCodes.Call || method == null || !method.IsGenericMethod) continue;
+                // Track the cloned template and recipe lists even if setup fails before returning a config.
+                if ((method.DeclaringType == typeof(ScriptableObject) && method.Name == "CreateInstance")
+                    || (method.DeclaringType == typeof(UnityEngine.Object) && method.Name == "Instantiate"
+                        && method.ReturnType == typeof(LevelConfigBase)))
+                {
+                    yield return new CodeInstruction(OpCodes.Dup);
+                    yield return new CodeInstruction(OpCodes.Call, record);
+                }
+            }
         }
 
         private static Exception ConfigFinalizer(Exception __exception, string __state)

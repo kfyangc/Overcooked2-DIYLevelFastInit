@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
 using HarmonyLib;
+using LevelEditorStub;
 using OC2DIYLevel;
 using UnityEngine;
 
@@ -89,8 +90,11 @@ namespace DIYLevelFastInit.ResourceFailures
                 Type bundles = assembly.GetType("OC2DIYLevel.DIYLevelAssetBundleManager", false);
                 Type pseudo = assembly.GetType("OC2DIYLevel.PseudoPrefabManager", false);
                 Type recipeHelper = assembly.GetType("OC2DIYLevel.RecipeHelper", false);
-                Patch(harmony, Find(setup, "SetupConfig", 3), "SetupConfigPrefix", null, "SetupConfigFinalizer");
-                Patch(harmony, Find(setup, "SetupSceneDirectoryData", 2), "SetupDirectoryPrefix", null, "SetupDirectoryFinalizer");
+                bool runtimeTemplates = LevelConfigFactory.UsesRuntimeTemplates;
+                Patch(harmony, LevelConfigFactory.SetupMethod,
+                    runtimeTemplates ? nameof(RuntimeSetupConfigPrefix) : nameof(SetupConfigPrefix), null, nameof(SetupConfigFinalizer));
+                Patch(harmony, Find(setup, "SetupSceneDirectoryData", runtimeTemplates ? 1 : 2),
+                    runtimeTemplates ? nameof(RuntimeSetupDirectoryPrefix) : nameof(SetupDirectoryPrefix), null, nameof(SetupDirectoryFinalizer));
                 Patch(harmony, Find(bundles, "Initialize", 0), "InitializePrefix", null, "InitializeFinalizer");
                 Patch(harmony, Find(pseudo, "GetAssetBundle", 1), null, null, "BundleFinalizer");
                 Patch(harmony, FindNonGenericLoadAsset(pseudo), null, null, "AssetFinalizer");
@@ -263,11 +267,22 @@ namespace DIYLevelFastInit.ResourceFailures
 
         private static void SetupConfigPrefix(object __0, object __1, int __2, out SetupTrace __state)
         {
-            __state = new SetupTrace { Previous = CurrentTrace, Directory = CurrentDirectory, LevelInfo = __1, Resource = __0, PlayerCount = __2 };
-            CurrentTrace = __state;
+            __state = BeginSetupTrace(__0, __1, __2);
+        }
+
+        private static void RuntimeSetupConfigPrefix(LevelInfoSO __0, int __1, out SetupTrace __state)
+        {
+            __state = BeginSetupTrace(ReferenceEquals(__0, null) ? null : LevelConfigFactory.GetRuntimeTemplate(__0), __0, __1);
+        }
+
+        private static SetupTrace BeginSetupTrace(object template, object level, int playerCount)
+        {
+            SetupTrace trace = new SetupTrace { Previous = CurrentTrace, Directory = CurrentDirectory, LevelInfo = level, Resource = template, PlayerCount = playerCount };
+            CurrentTrace = trace;
             // Directory previews run one setup per level and player count; their start lines are redundant with the
             // directory summary, so only standalone setups (real level loads) log a start line.
-            if (__state.Directory == null) BlockerLog.Debug("Resource", "SETUP_START", __state.Describe());
+            if (trace.Directory == null) BlockerLog.Debug("Resource", "SETUP_START", trace.Describe());
+            return trace;
         }
 
         private static Exception SetupConfigFinalizer(Exception __exception, SetupTrace __state)
@@ -320,9 +335,20 @@ namespace DIYLevelFastInit.ResourceFailures
 
         private static void SetupDirectoryPrefix(object __0, object __1, out DirectoryTrace __state)
         {
-            __state = new DirectoryTrace { Previous = CurrentDirectory, Resource = __0, Levels = __1 as Array };
-            CurrentDirectory = __state;
-            BlockerLog.Debug("Resource", "DIRECTORY_START", "levelCount=" + (__state.Levels == null ? "null" : __state.Levels.Length.ToString()));
+            __state = BeginDirectoryTrace(__0, __1 as Array);
+        }
+
+        private static void RuntimeSetupDirectoryPrefix(object __0, out DirectoryTrace __state)
+        {
+            __state = BeginDirectoryTrace(null, __0 as Array);
+        }
+
+        private static DirectoryTrace BeginDirectoryTrace(object template, Array levels)
+        {
+            DirectoryTrace trace = new DirectoryTrace { Previous = CurrentDirectory, Resource = template, Levels = levels };
+            CurrentDirectory = trace;
+            BlockerLog.Debug("Resource", "DIRECTORY_START", "levelCount=" + (levels == null ? "null" : levels.Length.ToString()));
+            return trace;
         }
 
         private static Exception SetupDirectoryFinalizer(Exception __exception, DirectoryTrace __state)
