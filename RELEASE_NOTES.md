@@ -1,3 +1,19 @@
+# 1.9.4
+
+## 中文
+
+修复升级到 OC2DIYLevel 0.11.1 后，确认存档时卡在选档界面的问题。
+
+- 适配新版关卡配置接口，初始化普通关卡和持久战所需的配置模板。
+- 同一份 DLL 兼容 OC2DIYLevel 0.10.0、0.11.0 和 0.11.1。
+
+## English
+
+Fixes a hang on the save selection screen after upgrading to OC2DIYLevel 0.11.1.
+
+- Adapts to the new level configuration API and initializes the templates for standard and Horde levels.
+- The same DLL supports OC2DIYLevel 0.10.0, 0.11.0, and 0.11.1.
+
 # 1.9.3
 
 ## 中文

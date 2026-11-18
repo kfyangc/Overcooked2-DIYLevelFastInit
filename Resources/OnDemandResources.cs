@@ -123,10 +123,12 @@ namespace DIYLevelFastInit
                 finalizer: new HarmonyMethod(typeof(OnDemandResources), nameof(SaveReadyFinalizer)));
             Patch(harmony, typeof(RuntimePrefabManager), "ClearAllRuntimePrefabs", nameof(ClearPrefix), null);
             Patch(harmony, typeof(RuntimePrefabManager), "CloneAsInactivePrefab", null, nameof(ClonePostfix));
-            harmony.Patch(AccessTools.Method(typeof(LevelConfigSetup), "SetupConfig"),
+            harmony.Patch(LevelConfigFactory.SetupMethod,
                 prefix: new HarmonyMethod(typeof(OnDemandResources), nameof(ConfigPrefix)),
-                postfix: new HarmonyMethod(typeof(OnDemandResources), nameof(ConfigPostfix)),
-                finalizer: new HarmonyMethod(typeof(OnDemandResources), nameof(ConfigFinalizer)));
+                postfix: LevelConfigFactory.UsesRuntimeTemplates ? null : new HarmonyMethod(typeof(OnDemandResources), nameof(ConfigPostfix)),
+                transpiler: LevelConfigFactory.UsesRuntimeTemplates ? new HarmonyMethod(typeof(OnDemandResources), nameof(TrackConfigAllocations)) : null,
+                finalizer: new HarmonyMethod(typeof(OnDemandResources), nameof(ConfigFinalizer)),
+                ilmanipulator: null);
             InstallRecipeHooks(harmony);
             SceneManager.sceneLoaded += SceneLoaded;
             SceneManager.sceneUnloaded += SceneUnloaded;

@@ -1,8 +1,14 @@
 # DIYLevelFastInit
 
-《Overcooked! 2》[OC2DIYLevel](https://github.com/gua248/Overcooked2-LevelEditor) 的启动与内存优化补丁。需要 BepInEx 5 和 OC2DIYLevel 0.10.0 或 0.11.0。
+《Overcooked! 2》[OC2DIYLevel](https://github.com/gua248/Overcooked2-LevelEditor) 的启动与内存优化补丁。需要 BepInEx 5 和 OC2DIYLevel 0.10.0、0.11.0 或 0.11.1。
 
 [English README](README.md)
+
+## 1.9.4
+
+[发布说明](RELEASE_NOTES.md#194)
+
+适配 OC2DIYLevel 0.11.1 的关卡配置接口，修复确认存档时卡在选档界面的问题。
 
 ## 1.9.3
 

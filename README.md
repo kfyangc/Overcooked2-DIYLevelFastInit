@@ -1,8 +1,14 @@
 # DIYLevelFastInit
 
-Startup and memory optimization for the [OC2DIYLevel](https://github.com/gua248/Overcooked2-LevelEditor) custom-level plugin in *Overcooked! 2*. Requires BepInEx 5 and OC2DIYLevel 0.10.0 or 0.11.0.
+Startup and memory optimization for the [OC2DIYLevel](https://github.com/gua248/Overcooked2-LevelEditor) custom-level plugin in *Overcooked! 2*. Requires BepInEx 5 and OC2DIYLevel 0.10.0, 0.11.0, or 0.11.1.
 
 [中文说明](README_CN.md)
+
+## Version 1.9.4
+
+[Release notes](RELEASE_NOTES.md#194)
+
+Fixes a hang when confirming a save slot with OC2DIYLevel 0.11.1 by adapting to its new level configuration API.
 
 ## Version 1.9.3
 

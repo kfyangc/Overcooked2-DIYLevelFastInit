@@ -1,8 +1,8 @@
 # AGENTS.md
 
 BepInEx 5 plugin (net35) that patches
-[OC2DIYLevel](https://github.com/gua248/Overcooked2-LevelEditor) 0.10.0 and 0.11.0 for Overcooked! 2.
-Version 1.9.3 keeps a complete lightweight level catalog while loading info resources
+[OC2DIYLevel](https://github.com/gua248/Overcooked2-LevelEditor) 0.10.0, 0.11.0, and 0.11.1 for Overcooked! 2.
+FastInit keeps a complete lightweight level catalog while loading info resources
 and building configurations only for the selected level. Async discovery, menu healing,
 the progress indicator, and incremental hot reload remain supported.
 
@@ -338,8 +338,12 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 - Private statics of the target plugin are set via reflection (`AccessTools.Field`):
   `commonBundle`, `diyLevelCover`, `diyLevelGameSessionPrefab`, `configTemplateSO`,
   `Instance`, `levelSetSelectionMenu`, and method `AddLevelSetButton`. These names are the
-  contract with the compiled OC2DIYLevel 0.10.0 and 0.11.0 — if that plugin updates, re-verify against
+  contract with the supported OC2DIYLevel binaries. If that plugin updates, re-verify against
   its decompiled source at `C:\Users\yang\.cache\OC2DIYLevel-decompiled\OC2DIYLevel_src\`.
+
+- `LevelConfigFactory` binds the installed `SetupConfig` signature. For 0.11.1, initialize the
+  standard and Horde template descriptors before setting `commonBundle` and keep the factory
+  call-site hooks that track owned allocations and diagnose missing resources.
 
 ## Selected level assets
 
@@ -537,7 +541,7 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 ## Publishing rule
 
 Test builds append an incrementing fourth component to the latest approved release
-version. The approved release is `1.9.3`, so subsequent tests use `1.9.3.x`.
+version. The approved release is `1.9.4`, so subsequent tests use `1.9.4.x`.
 Changing the three-component release version requires the user's explicit approval.
 Keep historical test commits under their original test versions.
 
