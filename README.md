@@ -4,6 +4,12 @@ Startup and memory optimization for the [OC2DIYLevel](https://github.com/gua248/
 
 [中文说明](README_CN.md)
 
+## Version 1.9.4.1
+
+[Release notes](RELEASE_NOTES.md#1941)
+
+Startup preparation and the "More Levels" menu now run in parallel: each level set's startup conversion and catalog entry publish to the menu immediately, so sets appear one by one (header shows "loading x/y") instead of all at once after every set finishes. Conversion stays strictly serial per set, and entry/preview gating between conversion batches is unchanged. A first-conversion startup may take slightly longer overall because cross-set conversion parallelism is gone.
+
 ## Version 1.9.4
 
 [Release notes](RELEASE_NOTES.md#194)

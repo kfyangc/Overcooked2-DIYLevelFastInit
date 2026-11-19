@@ -98,7 +98,15 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   `FastInitHost` loads the remaining `common*` dependencies in the background.
   `IsInitialized` (= `commonBundle != null`) must become true synchronously because the
   original consumer patches check it. Initialization is idempotent.
-- Discovery processes sets one at a time in directory order. `LoadInfoSet` first tries
+- Discovery processes sets one at a time in directory order, pipelined per set:
+  the set's startup conversion batch drains (workers exited, work directory
+  cleaned) immediately before its `LoadInfoSet` runs, then the set publishes to
+  `levelSetInfos` and the menu right away, so "More Levels" fills in while later
+  sets still prepare. `InfoFilesPreparing` marks only the active batch window:
+  it is false between batches, which is what keeps `LoadInfoSet`'s native
+  fallback (the `InfoFilesPreparing` waits/throws in the info bundle loader)
+  deadlock-free. Do not run conversion batches for several sets concurrently
+  with catalog requests. `LoadInfoSet` first tries
   `LevelCatalogCache`. On a miss, `CatalogMetadataRequest` reads scalar fields directly
   from the serialized source on one managed worker. Only the main thread creates
   lightweight SOs, writes the normal cache and publishes entries. The worker never
@@ -121,7 +129,9 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   yielding after every cache hit. A single set can exceed the budget. Preserve directory
   order and transition pauses. Recheck resident common bundles before each request,
   since other loaders can complete bundles while an earlier request is pending.
-  `startup timing` separates preparation/common/catalog phases and catalog subphases;
+  `startup timing` separates common/catalog phases and catalog subphases;
+  since the per-set pipeline, `infoPreparationMs` is the summed conversion time of
+  the per-set batches and a subset of `catalogMs`, not a preceding phase;
   wall-time fields include native/frame waits and must not be double-counted. Cache
   miss reasons and thumbnail warmup timings distinguish source scans from cache reads.
 - `SetMetadata`, `LevelMetadata`, and `PlayerMetadata` contain only strings, numbers,
@@ -430,7 +440,13 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   only enqueue diagnostics; main-thread Update drains them. Retain `InfoFilesPreparing`
   until every queued/running block and file worker has exited, including disposal.
   Never call Unity or BepInEx from a worker.
-- Complete this startup phase before any info graph/catalog/preview/native request.
+- Startup conversion runs as one batch per level set, immediately before that set's
+  catalog request; no info graph/catalog/preview/native request may touch a set whose
+  batch is still running, and `InfoFilesPreparing` is true only while some batch is
+  active. Entering an already-published set during a later set's conversion window is
+  blocked by the flag as before; a cross-set dependency held open by native code can
+  make that later file's replacement fail for this startup (original retained, retried
+  next startup) — verified content-equivalent replacement keeps this benign.
   Keep synchronous `common` initialization and IsInitialized timing unchanged. Hot
   refresh must drain native requests and release affected resources before replacement.
   Early remote DIY messages may use a basename-only

@@ -27,24 +27,39 @@ namespace DIYLevelFastInit
             catch (Exception e) { Log.LogWarning("level bundle startup options unavailable; defaults retained: " + e.Message); }
         }
 
-        internal static IEnumerator PrepareInfoBundleFiles(string pluginDir)
+        // One startup snapshot of every set's top-level bundle files, in directory
+        // order; also seeds the global file counter used by the progress label.
+        internal static List<string>[] CollectSetBundlePaths(List<DirectoryInfo> dirs)
+        {
+            List<string>[] result = new List<string>[dirs.Count];
+            int total = 0;
+            for (int i = 0; i < dirs.Count; i++)
+            {
+                List<string> paths = new List<string>();
+                foreach (FileInfo file in FastInitHost.SafeGetFiles(dirs[i], "*"))
+                    if (LevelBundleFiles.IsBundle(file.FullName)) paths.Add(file.FullName);
+                result[i] = paths;
+                total += paths.Count;
+            }
+            InfoOptimizationTotal = total;
+            return result;
+        }
+
+        // Per-set startup conversion: this set's files are fully converted (workers
+        // drained, work directory cleaned) before its catalog request runs, so the
+        // set can publish to the level-set menu immediately (see FastInitHost.LoadHeavy).
+        internal static IEnumerator PrepareSetInfoFiles(string setName, List<string> paths)
         {
             InfoBundleOptimizationBatch batch = null;
             try
             {
-                if (!OptimizeInfoFilesOnStartup && !RestoreInfoFilesOnStartup) yield break;
-                List<string> paths = new List<string>();
-                foreach (DirectoryInfo dir in FastInitHost.SafeGetDirs(Path.Combine(pluginDir, "levels")))
-                {
-                    foreach (FileInfo file in FastInitHost.SafeGetFiles(dir, "*"))
-                        if (LevelBundleFiles.IsBundle(file.FullName)) paths.Add(file.FullName);
-                }
                 batch = new InfoBundleOptimizationBatch(paths.ToArray(), RestoreInfoFilesOnStartup);
                 _infoOptimization = batch;
                 InfoFilesPreparing = true;
-                InfoOptimizationProgress = (RestoreInfoFilesOnStartup ? "restoring " : "checking ") + "0/" + paths.Count;
+                InfoOptimizationProgress = (RestoreInfoFilesOnStartup ? "restoring " : "checking ")
+                    + InfoOptimizationDone + "/" + InfoOptimizationTotal;
                 Log.LogInfo("startup level bundle " + (RestoreInfoFilesOnStartup ? "restoration" : "optimization")
-                    + " started: " + paths.Count + " files");
+                    + " started [" + setName + "]: " + paths.Count + " files");
                 batch.Start();
                 while (!batch.Done)
                 {
@@ -52,7 +67,9 @@ namespace DIYLevelFastInit
                     yield return null;
                 }
                 UpdateInfoOptimization(batch);
-                Log.LogInfo("startup level bundle preparation complete: " + batch.Completed + "/" + batch.Total);
+                Log.LogInfo("startup level bundle preparation complete [" + setName + "]: "
+                    + batch.Completed + "/" + batch.Total + " files");
+                InfoOptimizationDone += batch.Completed;
             }
             finally
             {
@@ -63,6 +80,26 @@ namespace DIYLevelFastInit
                     InfoOptimizationProgress = null;
                     if (ReferenceEquals(_infoOptimization, batch)) _infoOptimization = null;
                 }
+            }
+        }
+
+        // Defensive end-of-startup gate clear (empty levels dir, conversion options
+        // off, or an aborted pipeline). A still-running batch keeps the gate.
+        internal static void FinishStartupInfoPreparation()
+        {
+            InfoBundleOptimizationBatch batch = _infoOptimization;
+            if (batch == null)
+            {
+                InfoFilesPreparing = false;
+                InfoOptimizationProgress = null;
+                return;
+            }
+            if (batch.Done)
+            {
+                batch.Dispose();
+                _infoOptimization = null;
+                InfoFilesPreparing = false;
+                InfoOptimizationProgress = null;
             }
         }
 
@@ -80,7 +117,7 @@ namespace DIYLevelFastInit
             }
             string current = batch.Current;
             InfoOptimizationProgress = (RestoreInfoFilesOnStartup ? "restoring " : "checking ")
-                + batch.Completed + "/" + batch.Total
+                + (InfoOptimizationDone + batch.Completed) + "/" + InfoOptimizationTotal
                 + (string.IsNullOrEmpty(current) ? "" : ": " + Path.GetFileName(current));
         }
 
