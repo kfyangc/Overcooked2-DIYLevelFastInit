@@ -91,6 +91,7 @@ namespace DIYLevelFastInit
                 _legacyConflict.Tick();
                 return;
             }
+            if (_blockerConflict != null) _blockerConflict.Tick();
             if (_resourceFailureBlocker != null) _resourceFailureBlocker.Tick();
             InfoBundleOptimizationBatch batch = _infoOptimization;
             if (!_patchesReady || batch == null) return;

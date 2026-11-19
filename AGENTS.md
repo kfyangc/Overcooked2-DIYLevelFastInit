@@ -367,9 +367,15 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   prefix from starting work. Cancel failed preparation before closing the old UI;
   reset the gate only for the current confirmed error after the old save UI closes.
 - Standalone ResourceReadFailureBlocker must be removed from the game's plugin scan
-  tree before testing this integration. Warn about its GUID; do not silently modify
-  another installed plugin. Preserve original exceptions/logs, coalesce duplicate
-  notices, and keep the source author's credit in `THIRD_PARTY_NOTICES.md`.
+  tree before testing this integration. Its GUID is detected at startup like the
+  legacy FastInit GUID (soft dependency for load order, `PluginConflictDialog`), but
+  unlike the legacy conflict only the integrated `ResourceFailureBlocker` stays
+  uncreated: FastInit core hooks, loading and menus keep running, while a native
+  dialog shows the standalone DLL path and asks the user to uninstall it and
+  restart. The legacy FastInit conflict still deactivates the whole plugin. Do not
+  silently modify another installed plugin. Preserve original exceptions/logs,
+  coalesce duplicate notices, and keep the source author's credit in
+  `THIRD_PARTY_NOTICES.md`.
 - Preparation notices deduplicate within a load attempt, not for the whole session.
   Begin a fresh notice attempt only when a server, direct client or queued client
   preparation starts; ignored duplicate requests must not reset it. Bound the pending

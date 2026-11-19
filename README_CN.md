@@ -4,6 +4,12 @@
 
 [English README](README.md)
 
+## 1.9.4.2
+
+[发布说明](RELEASE_NOTES.md#1942)
+
+启动时检测仍安装的独立版「选档空白修复」（ResourceReadFailureBlocker）DLL（该功能 1.9.x 起已集成）：本次启动仅停用集成的失败拦截功能（由已装的独立版继续负责），快速载入等其余功能照常运行；游戏原生弹窗显示 DLL 路径，提示卸载后重启。软依赖保证检测不受加载顺序影响；旧版 FastInit 冲突仍为整包停用。
+
 ## 1.9.4
 
 [发布说明](RELEASE_NOTES.md#194)
@@ -59,7 +65,7 @@ HC 并行直接以原生的 128 KiB 输出块为分界，不再按文件名或�
 
 场景运行期辅助函数抛出异常时保留原异常及诊断日志，不单凭这一点阻断整个关卡。只有异常实际导致配置构建或资源准备失败时，才进入加载失败处理。弹窗显示记录到的真实异常类型和原因。
 
-安装测试前，请从 `BepInEx/plugins` 移出独立的 ResourceReadFailureBlocker DLL（包括 `OC2DIYLevel-ResourceReadFailureBlocker-选档空白修复.dll`），并重启游戏。旧插件保留时仍会安装自己的补丁，FastInit 会记录冲突提示。只替换 FastInit DLL 即可，不需要改动 OC2DIYLevel DLL。错误框支持简体／繁体中文、英语、日语、韩语，其余游戏语言回退英语；详细日志位于 `BepInEx/logs/oc2.diylevel.fastinit.resource-failures/`，最多保留 20 份会话日志。
+安装测试前，请从 `BepInEx/plugins` 移出独立的 ResourceReadFailureBlocker DLL（包括 `OC2DIYLevel-ResourceReadFailureBlocker-选档空白修复.dll`），并重启游戏。若仍保留独立版 DLL，FastInit 会在启动时检测其 GUID，本次启动停用集成的失败拦截功能（由已装的独立版继续负责），快速载入等其余功能照常运行，同时弹出游戏原生对话框显示独立版 DLL 路径，提示卸载后重启。只替换 FastInit DLL 即可，不需要改动 OC2DIYLevel DLL。错误框支持简体／繁体中文、英语、日语、韩语，其余游戏语言回退英语；详细日志位于 `BepInEx/logs/oc2.diylevel.fastinit.resource-failures/`，最多保留 20 份会话日志。
 
 这项处理用于识别并停止失败的资源加载，不会修复地图内容或 OC2DIYLevel 的物件实现。当前离线检查覆盖两个版本的补丁安装、类型参数、异常传播与入口阻断；原生界面、young 关卡和联机表现仍需实际游戏测试。
 

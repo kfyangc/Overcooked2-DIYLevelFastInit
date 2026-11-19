@@ -1,3 +1,27 @@
+# 1.9.4.2
+
+## 中文
+
+检测独立版「选档空白修复」（ResourceReadFailureBlocker）DLL，弹窗提示卸载，仅停用已集成的同名功能。
+
+- 启动时检测独立版 GUID `com.ch3ngyz.plugin.overcooked2.diylevel.resourcereadfailureblocker`；检测到后本次启动不创建集成的失败拦截（`ResourceFailureBlocker`），失败拦截由已安装的独立版继续负责，快速载入等其余功能照常运行。
+- 同时复用旧版检测的原生弹窗：显示独立版 DLL 完整路径，提示退出游戏、卸载后重启；弹窗期间其余功能不受影响。
+- 通过软依赖保证独立版插件先于 FastInit 加载，检测不受加载顺序影响；旧版 FastInit 的冲突仍为整包停用，优先检测。
+- 原有的启动后日志冲突警告移除（检测已提前到创建集成功能之前）。
+
+Release 构建通过；装有独立版 DLL 的实机弹窗与"仅停用集成功能"行为待验证。
+
+## English
+
+Detects the standalone ResourceReadFailureBlocker DLL, prompts for removal, and disables only the integrated counterpart.
+
+- At startup the standalone GUID `com.ch3ngyz.plugin.overcooked2.diylevel.resourcereadfailureblocker` is detected; the integrated failure handling (`ResourceFailureBlocker`) is then not created for the session. The installed standalone blocker keeps owning failure handling, while fast init and every other feature keep running.
+- The legacy-detection native dialog is reused: it shows the standalone DLL path and asks the user to exit, uninstall and restart; nothing else is affected while the dialog is pending.
+- A soft BepInEx dependency makes the standalone plugin load before FastInit, so detection is load-order independent. The legacy FastInit conflict still deactivates the whole plugin and is checked first.
+- The previous post-startup log-only conflict warning is removed (detection now happens before the integrated feature is created).
+
+The Release build passes; the in-game dialog and the feature-only disable with the standalone DLL installed still need verification.
+
 # 1.9.4
 
 ## 中文
