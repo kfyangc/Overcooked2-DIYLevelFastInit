@@ -2,11 +2,18 @@
 
   <PropertyGroup>
     <TargetFramework>net35</TargetFramework>
-    <AssemblyName>DIYLevelFastInit</AssemblyName>
+    <!-- The assembly name must never match a legacy FastInit DLL: Unity Mono resolves the
+         second Assembly.LoadFile of an already-loaded simple name back to the first image,
+         so a legacy DLL installed alongside this one would replace this plugin's types with
+         the legacy class (observed: legacy Awake ran twice, this plugin never executed).
+         The distributed file name stays DIYLevelFastInit.dll; csc takes the metadata name
+         from the output file, so the primary output keeps the distinct name and the copy
+         below carries the published name (a renamed file keeps its metadata name). -->
+    <AssemblyName>OC2DIYLevelFastInit</AssemblyName>
     <RootNamespace>DIYLevelFastInit</RootNamespace>
     <LangVersion>7.3</LangVersion>
     <!-- Keep in sync with PluginVersion in FastInitPlugin.cs -->
-    <Version>1.9.5</Version>
+    <Version>1.9.6</Version>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
     <DebugType>none</DebugType>
@@ -69,5 +76,10 @@
       <Private>false</Private>
     </Reference>
   </ItemGroup>
+
+  <!-- Publish the plugin under its historical file name (see the AssemblyName note above). -->
+  <Target Name="CopyPluginToPublishedName" AfterTargets="Build" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll" DestinationFiles="$(OutputPath)DIYLevelFastInit.dll" />
+  </Target>
 
 </Project>

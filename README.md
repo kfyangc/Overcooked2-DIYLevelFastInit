@@ -4,6 +4,12 @@ Startup and memory optimization for the [OC2DIYLevel](https://github.com/gua248/
 
 [中文说明](README_CN.md)
 
+## Version 1.9.6
+
+[Release notes](RELEASE_NOTES.md#196)
+
+Fixes the new plugin never loading when a legacy 1.3 DLL is also installed: both DLLs shared the assembly name `DIYLevelFastInit`, so Unity Mono resolved the second load back to the legacy image and the new version's detection and uninstall dialog never ran. The assembly name is now `OC2DIYLevelFastInit`; the distributed file name is unchanged.
+
 ## Version 1.9.5
 
 [Release notes](RELEASE_NOTES.md#195)

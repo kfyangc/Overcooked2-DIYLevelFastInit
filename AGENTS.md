@@ -44,6 +44,13 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 - Default game directory: `D:\Games\Steam Games\steamapps\common\Overcooked! 2`.
   Output: `bin/Release/DIYLevelFastInit.dll`. Keep the csproj version and `PluginVersion`
   in sync. Rebuild only this hook; `../OC2DIYLevel_src/` is reference source.
+- The assembly metadata name is `OC2DIYLevelFastInit` (csproj `AssemblyName`), never
+  `DIYLevelFastInit`: Unity Mono resolves a second `Assembly.LoadFile` of an
+  already-loaded simple name back to the first image, so a legacy FastInit DLL installed
+  alongside silently replaces this plugin's types with the legacy class (its Awake runs
+  twice and this plugin never executes). csc takes the metadata name from the output file,
+  so the primary output is `OC2DIYLevelFastInit.dll` and a post-build copy publishes it as
+  `bin/Release/DIYLevelFastInit.dll` (renamed files keep their metadata name).
 - Back up the installed DLL outside the plugins scan tree before deployment. The game
   locks the loaded DLL: coordinate shutdown with the user, copy only after it exits,
   compare source/destination SHA-256 hashes, then tell the user it is ready to restart.

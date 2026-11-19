@@ -4,6 +4,12 @@
 
 [English README](README.md)
 
+## 1.9.6
+
+[发布说明](RELEASE_NOTES.md#196)
+
+修复旧版 1.3 DLL 共存时新版完全不加载、也不弹卸载提示的问题：两个 DLL 的程序集名相同，Unity Mono 把第二次加载解析回旧版程序集，新版代码从未运行。程序集名改为 `OC2DIYLevelFastInit`，发布文件名不变。
+
 ## 1.9.5
 
 [发布说明](RELEASE_NOTES.md#195)

@@ -1,3 +1,13 @@
+# 1.9.6
+
+## 中文
+
+修复旧版 1.3 DLL 共存时新版完全不加载、也不弹卸载提示的问题。
+
+## English
+
+Fixes the new plugin never loading — and never showing the uninstall dialog — when a legacy 1.3 DLL coexists.
+
 # 1.9.5
 
 ## 中文
