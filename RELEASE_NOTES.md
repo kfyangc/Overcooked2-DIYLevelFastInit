@@ -1,3 +1,25 @@
+# 1.9.4.1
+
+## 中文
+
+启动加载与"更多关卡"菜单展示并行化：不再等全部关卡集准备完才显示。
+
+- 每个关卡集的启动转换（`DIY info checking`）改为按集合执行，该集合转换完、编目完就立即出现在"更多关卡"菜单；菜单头部显示"加载中 x/y"，右上角角标在转换期显示文件进度、编目期显示集合进度。
+- 转换与编目按集合严格串行（该集合 worker 全部退出、工作目录清理完才发起编目请求），不引入新的并发；`InfoFilesPreparing` 仅在当前集合批次运行期间为真，批次间隙进图/预览按原逻辑放行。
+- 总转换工作量不变；失去跨集合的尾部并行，首次转换的启动总时长可能略增。热刷新转换与进度显示保持原行为。
+
+Release 构建通过；实机冷启动逐集显示、热启动回归与联机等待仍待验证。
+
+## English
+
+Pipelines startup preparation with "More Levels" display: sets no longer wait for all sets to finish.
+
+- Startup conversion (`DIY info checking`) now runs per level set; a set appears in the "More Levels" menu as soon as its own conversion and catalog entry complete. The menu header shows "loading x/y"; the corner label shows file progress during conversion and set progress during cataloguing.
+- Conversion and cataloguing stay strictly serial per set (all workers exited and the work directory cleaned before that set's catalog request); no new concurrency is introduced. `InfoFilesPreparing` is true only while a set's batch runs; entry and previews pass between batches exactly as before.
+- Total conversion work is unchanged; cross-set tail parallelism is lost, so a first-conversion startup may take slightly longer overall. Hot-refresh conversion and its progress display keep their existing behavior.
+
+The Release build passes; in-game cold-start incremental display, warm-start regression and multiplayer waits still need verification.
+
 # 1.9.4
 
 ## 中文

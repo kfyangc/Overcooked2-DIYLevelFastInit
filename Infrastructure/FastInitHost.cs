@@ -161,8 +161,6 @@ namespace DIYLevelFastInit
             try
             {
                 FastInitPlugin.Log.LogInfo("LoadHeavy started");
-                yield return FastInitPlugin.PrepareInfoBundleFiles(pluginDir);
-                preparationMs = startup.Elapsed.TotalMilliseconds;
                 // Plugins like WLoader may already keep commonW1/commonW2 resident in memory;
                 // skipping them saves the 1-2 seconds of reading the whole file just to be
                 // rejected as a duplicate by Unity.
@@ -206,9 +204,23 @@ namespace DIYLevelFastInit
                 System.Diagnostics.Stopwatch slice = System.Diagnostics.Stopwatch.StartNew();
                 List<DirectoryInfo> dirs = SafeGetDirs(Path.Combine(pluginDir, "levels"));
                 FastInitPlugin.TotalSets = dirs.Count;
+                // Per-set pipeline: convert one set's bundles, then catalog and publish it
+                // right away, so the level-set menu fills in while later sets still prepare.
+                bool convertFiles = FastInitPlugin.OptimizeInfoFilesOnStartup || FastInitPlugin.RestoreInfoFilesOnStartup;
+                List<string>[] setFiles = convertFiles ? FastInitPlugin.CollectSetBundlePaths(dirs) : null;
+                FastInitPlugin.InfoOptimizationDone = 0;
                 int sets = 0;
-                foreach (DirectoryInfo dir in dirs)
+                for (int index = 0; index < dirs.Count; index++)
                 {
+                    DirectoryInfo dir = dirs[index];
+                    // Conversion is pure managed I/O with no Unity requests; keep it ahead of
+                    // the transition wait so scene changes do not stall the pipeline.
+                    if (setFiles != null && setFiles[index].Count > 0)
+                    {
+                        double convertStarted = phase.Elapsed.TotalMilliseconds;
+                        yield return Guard(FastInitPlugin.PrepareSetInfoFiles(dir.Name, setFiles[index]), "info prepare " + dir.Name);
+                        preparationMs += phase.Elapsed.TotalMilliseconds - convertStarted;
+                    }
                     double pauseStarted = phase.Elapsed.TotalMilliseconds;
                     while (OnDemandResources.IsTransitioning || PseudoPrefabManager.isInCustomLevel)
                         yield return null;
@@ -261,6 +273,9 @@ namespace DIYLevelFastInit
             }
             finally
             {
+                // Per-set conversion interleaves with the catalog loop, so infoPreparationMs
+                // is a subset of catalogMs, not a phase preceding it.
+                FastInitPlugin.FinishStartupInfoPreparation();
                 FastInitPlugin.Log.LogInfo("startup timing: complete=" + complete + ", totalMs=" + StartupTimings.Ms(startup.Elapsed.TotalMilliseconds)
                     + ", infoPreparationMs=" + StartupTimings.Ms(preparationMs) + ", commonMs=" + StartupTimings.Ms(commonMs)
                     + ", catalogMs=" + StartupTimings.Ms(catalogMs) + ", " + timings.Summary());

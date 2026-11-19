@@ -21,7 +21,7 @@ namespace DIYLevelFastInit
     {
         public const string PluginGuid = "oc2.diylevel.fastinit";
         public const string PluginName = "DIYLevel 快速载入 / DIYLevel 启动速度优化 / DIYLevel FastInit";
-        public const string PluginVersion = "1.9.4";
+        public const string PluginVersion = "1.9.4.1";
 
         internal static ManualLogSource Log;
 
@@ -55,6 +55,10 @@ namespace DIYLevelFastInit
         internal static bool RestoreInfoFilesOnStartup;
         private static InfoBundleOptimizationBatch _infoOptimization;
         internal static string InfoOptimizationProgress;
+        // Files completed before the active batch / files in the whole progress scope.
+        // Startup accumulates across per-set batches; a refresh resets both per batch.
+        internal static int InfoOptimizationDone;
+        internal static int InfoOptimizationTotal;
         internal static bool UseDirectCatalogReader = true;
         private static CatalogMetadataRequest _catalogRead;
         private LevelDirectoryPoller _directoryPoller;
