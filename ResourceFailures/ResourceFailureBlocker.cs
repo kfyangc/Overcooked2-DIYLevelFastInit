@@ -8,12 +8,11 @@ namespace DIYLevelFastInit.ResourceFailures
     /// <summary>Owns the integrated resource-failure hooks, log listener and main-thread updates.</summary>
     internal sealed class ResourceFailureBlocker : IDisposable
     {
-        internal const string LegacyGuid = "com.ch3ngyz.plugin.overcooked2.diylevel.resourcereadfailureblocker";
         private readonly object _sync = new object();
         private readonly Queue<Assembly> _assemblies = new Queue<Assembly>();
         private Harmony _harmony;
         private PreparationLogListener _listener;
-        private bool _running, _legacyChecked;
+        private bool _running;
 
         internal static ResourceFailureBlocker Create()
         {
@@ -46,12 +45,6 @@ namespace DIYLevelFastInit.ResourceFailures
             if (!_running) return;
             try
             {
-                if (!_legacyChecked)
-                {
-                    _legacyChecked = true;
-                    if (BepInEx.Bootstrap.Chainloader.PluginInfos.ContainsKey(LegacyGuid))
-                        FastInitPlugin.Log.LogWarning("ResourceReadFailureBlocker is integrated into FastInit. Remove the standalone ResourceReadFailureBlocker DLL before restarting to avoid duplicate and unsafe legacy hooks.");
-                }
                 for (int i = 0; i < 8; i++)
                 {
                     Assembly assembly;

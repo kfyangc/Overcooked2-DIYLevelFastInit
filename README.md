@@ -4,6 +4,12 @@ Startup and memory optimization for the [OC2DIYLevel](https://github.com/gua248/
 
 [中文说明](README_CN.md)
 
+## Version 1.9.4.2
+
+[Release notes](RELEASE_NOTES.md#1942)
+
+Detects a still-installed standalone ResourceReadFailureBlocker DLL at startup (the feature is integrated since 1.9.x): only the integrated failure handling stays disabled for the session — the standalone DLL keeps owning it — while fast init and every other feature keep running. A native game dialog shows the DLL path and asks the user to uninstall it and restart. A soft BepInEx dependency keeps detection load-order independent; the legacy FastInit conflict still deactivates the whole plugin.
+
 ## Version 1.9.4.1
 
 [Release notes](RELEASE_NOTES.md#1941)
@@ -65,7 +71,7 @@ Notices coalesce repeated errors within one load attempt. Selecting the same lev
 
 Runtime helper exceptions retain their original exception and diagnostic log without independently blocking the level. Load failure handling requires a failure escaping configuration building or resource preparation. Dialogs display the recorded exception type and reason.
 
-Before testing, move the standalone ResourceReadFailureBlocker DLL out of `BepInEx/plugins` (including `OC2DIYLevel-ResourceReadFailureBlocker-选档空白修复.dll`) and restart the game. The old plugin would still install its own patches; FastInit logs a warning if it is present. Replace only the FastInit DLL; no OC2DIYLevel DLL changes are needed. Dialogs support Simplified/Traditional Chinese, English, Japanese and Korean, with English fallback for other game languages. Detailed session logs are under `BepInEx/logs/oc2.diylevel.fastinit.resource-failures/`, retaining at most 20 files.
+Before testing, move the standalone ResourceReadFailureBlocker DLL out of `BepInEx/plugins` (including `OC2DIYLevel-ResourceReadFailureBlocker-选档空白修复.dll`) and restart the game. If the standalone DLL is still installed, FastInit detects its GUID at startup, keeps the integrated failure handling disabled for the session (the standalone DLL keeps owning it) while every other feature keeps running, and shows a native dialog with the DLL path, asking the user to uninstall it and restart. Replace only the FastInit DLL; no OC2DIYLevel DLL changes are needed. Dialogs support Simplified/Traditional Chinese, English, Japanese and Korean, with English fallback for other game languages. Detailed session logs are under `BepInEx/logs/oc2.diylevel.fastinit.resource-failures/`, retaining at most 20 files.
 
 This handles failed resource reads; it does not repair map content or OC2DIYLevel object implementations. Offline checks cover both versions' patch installation, type arguments, exception propagation and entry gates. Native UI, young levels and multiplayer behavior still require gameplay testing.
 

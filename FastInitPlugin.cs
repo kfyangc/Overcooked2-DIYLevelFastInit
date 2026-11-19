@@ -16,12 +16,13 @@ namespace DIYLevelFastInit
     [BepInPlugin(PluginGuid, PluginName, PluginVersion)]
     [BepInProcess("Overcooked2.exe")]
     [BepInDependency("dev.gua.overcooked.diylevel")]
-    [BepInDependency(LegacyPluginConflict.LegacyGuid, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(PluginConflictDialog.LegacyGuid, BepInDependency.DependencyFlags.SoftDependency)]
+    [BepInDependency(PluginConflictDialog.StandaloneBlockerGuid, BepInDependency.DependencyFlags.SoftDependency)]
     public partial class FastInitPlugin : BaseUnityPlugin
     {
         public const string PluginGuid = "oc2.diylevel.fastinit";
         public const string PluginName = "DIYLevel 快速载入 / DIYLevel 启动速度优化 / DIYLevel FastInit";
-        public const string PluginVersion = "1.9.4.1";
+        public const string PluginVersion = "1.9.4.2";
 
         internal static ManualLogSource Log;
 
@@ -67,12 +68,15 @@ namespace DIYLevelFastInit
         private bool _directoryChanged, _directoryScanFailed, _destroying, _refreshRetry;
         private float _nextAutomaticSync;
         private ResourceFailures.ResourceFailureBlocker _resourceFailureBlocker;
-        private LegacyPluginConflict _legacyConflict;
+        private PluginConflictDialog _legacyConflict;
+        // Standalone blocker present: FastInit core keeps running, only the integrated
+        // failure hooks stay disabled while the uninstall dialog is pending.
+        private PluginConflictDialog _blockerConflict;
 
         private void Awake()
         {
             Log = Logger;
-            _legacyConflict = LegacyPluginConflict.Detect();
+            _legacyConflict = PluginConflictDialog.DetectLegacyFastInit();
             if (_legacyConflict != null) return;
             Instance = this;
             MethodInfo original = AccessTools.Method(typeof(DIYLevelAssetBundleManager), "Initialize");
@@ -106,7 +110,9 @@ namespace DIYLevelFastInit
                 Log.LogInfo("dirty stack destruction and sink count events ready: host count preserved; original serializers unchanged.");
                 _patchesReady = true;
                 ConfigureBundleCache();
-                _resourceFailureBlocker = ResourceFailures.ResourceFailureBlocker.Create();
+                _blockerConflict = PluginConflictDialog.DetectStandaloneBlocker();
+                if (_blockerConflict == null)
+                    _resourceFailureBlocker = ResourceFailures.ResourceFailureBlocker.Create();
                 Log.LogInfo("DIYLevel FastInit ready: lightweight catalog, on-demand level resources.");
             }
             catch (Exception e)
