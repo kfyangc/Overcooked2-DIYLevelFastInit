@@ -1,48 +1,20 @@
-# 1.9.4.2
+# 1.9.5
 
 ## 中文
 
-检测独立版「选档空白修复」（ResourceReadFailureBlocker）DLL，弹窗提示卸载，仅停用已集成的同名功能。
+启动准备与"更多关卡"菜单并行显示，并检测未卸载的独立版「选档空白修复」补丁。
 
-- 启动时检测独立版 GUID `com.ch3ngyz.plugin.overcooked2.diylevel.resourcereadfailureblocker`；检测到后本次启动不创建集成的失败拦截（`ResourceFailureBlocker`），失败拦截由已安装的独立版继续负责，快速载入等其余功能照常运行。
-- 同时复用旧版检测的原生弹窗：显示独立版 DLL 完整路径，提示退出游戏、卸载后重启；弹窗期间其余功能不受影响。
-- 通过软依赖保证独立版插件先于 FastInit 加载，检测不受加载顺序影响；旧版 FastInit 的冲突仍为整包停用，优先检测。
-- 原有的启动后日志冲突警告移除（检测已提前到创建集成功能之前）。
-
-Release 构建通过；装有独立版 DLL 的实机弹窗与"仅停用集成功能"行为待验证。
+- 每个关卡集的启动转换（`DIY info checking`）与编目按集合流水线执行：一个集合转换完、编目完就立即出现在"更多关卡"菜单，菜单头部显示"加载中 x/y"，不再等全部集合准备完一次性显示。右上角角标在转换期显示文件进度、编目期显示集合进度。
+- 转换与编目按集合严格串行（该集合 worker 全部退出、工作目录清理完才发起编目请求），不引入新的并发；转换批次之间的进图/预览门禁保持原逻辑。首次转换的启动总时长可能略增（失去跨集合转换并行），已转换过的启动不受影响。
+- 启动时检测仍安装的独立版 ResourceReadFailureBlocker DLL（GUID `com.ch3ngyz.plugin.overcooked2.diylevel.resourcereadfailureblocker`）：本次启动仅停用集成的失败拦截功能，由已安装的独立版继续负责，快速载入等其余功能照常运行。游戏原生弹窗显示独立版 DLL 路径，提示退出游戏、卸载后重启。软依赖保证检测不受加载顺序影响；旧版 FastInit 的冲突仍为整包停用。
 
 ## English
 
-Detects the standalone ResourceReadFailureBlocker DLL, prompts for removal, and disables only the integrated counterpart.
+Startup preparation now fills the "More Levels" menu progressively, and a still-installed standalone ResourceReadFailureBlocker is detected.
 
-- At startup the standalone GUID `com.ch3ngyz.plugin.overcooked2.diylevel.resourcereadfailureblocker` is detected; the integrated failure handling (`ResourceFailureBlocker`) is then not created for the session. The installed standalone blocker keeps owning failure handling, while fast init and every other feature keep running.
-- The legacy-detection native dialog is reused: it shows the standalone DLL path and asks the user to exit, uninstall and restart; nothing else is affected while the dialog is pending.
-- A soft BepInEx dependency makes the standalone plugin load before FastInit, so detection is load-order independent. The legacy FastInit conflict still deactivates the whole plugin and is checked first.
-- The previous post-startup log-only conflict warning is removed (detection now happens before the integrated feature is created).
-
-The Release build passes; the in-game dialog and the feature-only disable with the standalone DLL installed still need verification.
-
-# 1.9.4.1
-
-## 中文
-
-启动加载与"更多关卡"菜单展示并行化：不再等全部关卡集准备完才显示。
-
-- 每个关卡集的启动转换（`DIY info checking`）改为按集合执行，该集合转换完、编目完就立即出现在"更多关卡"菜单；菜单头部显示"加载中 x/y"，右上角角标在转换期显示文件进度、编目期显示集合进度。
-- 转换与编目按集合严格串行（该集合 worker 全部退出、工作目录清理完才发起编目请求），不引入新的并发；`InfoFilesPreparing` 仅在当前集合批次运行期间为真，批次间隙进图/预览按原逻辑放行。
-- 总转换工作量不变；失去跨集合的尾部并行，首次转换的启动总时长可能略增。热刷新转换与进度显示保持原行为。
-
-Release 构建通过；实机冷启动逐集显示、热启动回归与联机等待仍待验证。
-
-## English
-
-Pipelines startup preparation with "More Levels" display: sets no longer wait for all sets to finish.
-
-- Startup conversion (`DIY info checking`) now runs per level set; a set appears in the "More Levels" menu as soon as its own conversion and catalog entry complete. The menu header shows "loading x/y"; the corner label shows file progress during conversion and set progress during cataloguing.
-- Conversion and cataloguing stay strictly serial per set (all workers exited and the work directory cleaned before that set's catalog request); no new concurrency is introduced. `InfoFilesPreparing` is true only while a set's batch runs; entry and previews pass between batches exactly as before.
-- Total conversion work is unchanged; cross-set tail parallelism is lost, so a first-conversion startup may take slightly longer overall. Hot-refresh conversion and its progress display keep their existing behavior.
-
-The Release build passes; in-game cold-start incremental display, warm-start regression and multiplayer waits still need verification.
+- Startup conversion (`DIY info checking`) and cataloguing run as a per-set pipeline: a set appears in the "More Levels" menu as soon as its own files are converted and catalogued, with a "loading x/y" header, instead of everything appearing after the last set. The corner label shows file progress during conversion and set progress during cataloguing.
+- Conversion and cataloguing stay strictly serial per set (all workers exited and the work directory cleaned before that set's catalog request); no new concurrency is introduced, and entry/preview gating between conversion batches is unchanged. A first-conversion startup may take slightly longer overall (cross-set conversion parallelism is lost); startups with everything already converted are unaffected.
+- A still-installed standalone ResourceReadFailureBlocker DLL (GUID `com.ch3ngyz.plugin.overcooked2.diylevel.resourcereadfailureblocker`) is detected at startup: only the integrated failure handling is disabled for the session and the standalone DLL keeps owning it, while fast init and every other feature keep running. A native dialog shows the DLL path and asks the user to exit, uninstall and restart. Detection is load-order independent via a soft dependency; the legacy FastInit conflict still deactivates the whole plugin.
 
 # 1.9.4
 

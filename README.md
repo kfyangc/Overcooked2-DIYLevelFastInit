@@ -4,17 +4,11 @@ Startup and memory optimization for the [OC2DIYLevel](https://github.com/gua248/
 
 [中文说明](README_CN.md)
 
-## Version 1.9.4.2
+## Version 1.9.5
 
-[Release notes](RELEASE_NOTES.md#1942)
+[Release notes](RELEASE_NOTES.md#195)
 
-Detects a still-installed standalone ResourceReadFailureBlocker DLL at startup (the feature is integrated since 1.9.x): only the integrated failure handling stays disabled for the session — the standalone DLL keeps owning it — while fast init and every other feature keep running. A native game dialog shows the DLL path and asks the user to uninstall it and restart. A soft BepInEx dependency keeps detection load-order independent; the legacy FastInit conflict still deactivates the whole plugin.
-
-## Version 1.9.4.1
-
-[Release notes](RELEASE_NOTES.md#1941)
-
-Startup preparation and the "More Levels" menu now run in parallel: each level set's startup conversion and catalog entry publish to the menu immediately, so sets appear one by one (header shows "loading x/y") instead of all at once after every set finishes. Conversion stays strictly serial per set, and entry/preview gating between conversion batches is unchanged. A first-conversion startup may take slightly longer overall because cross-set conversion parallelism is gone.
+Level sets now appear in "More Levels" one by one as each finishes its own startup conversion and cataloguing (menu header shows "loading x/y"), instead of all at once after every set. A still-installed standalone ResourceReadFailureBlocker DLL is detected at startup: only the integrated failure handling is disabled for the session, a native dialog shows the DLL path and asks the user to uninstall it, and every other feature keeps running.
 
 ## Version 1.9.4
 
