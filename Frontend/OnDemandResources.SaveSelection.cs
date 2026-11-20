@@ -109,7 +109,9 @@ namespace DIYLevelFastInit
 
         private static bool SelectionPrefix()
         {
-            if (ResourceFailures.FailureGate.Active || FastInitPlugin.InfoFilesPreparing || FastInitPlugin.Syncing || IsSaveEntryActive || _catalogBundles != null) return false;
+            // Startup conversion no longer blocks selection: menu levels belong to
+            // published sets and the load gates re-check per set downstream.
+            if (ResourceFailures.FailureGate.Active || FastInitPlugin.Syncing || IsSaveEntryActive || _catalogBundles != null) return false;
             if (_selectionFrame == Time.frameCount || (_visibleSaveDialog != null && _visibleSaveDialog.gameObject.activeInHierarchy))
             {
                 FastInitPlugin.Log.LogInfo("duplicate DIY level selection ignored: save dialog already opening/open");

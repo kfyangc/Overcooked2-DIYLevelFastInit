@@ -209,43 +209,76 @@ namespace DIYLevelFastInit
                 bool convertFiles = FastInitPlugin.OptimizeInfoFilesOnStartup || FastInitPlugin.RestoreInfoFilesOnStartup;
                 List<string>[] setFiles = convertFiles ? FastInitPlugin.CollectSetBundlePaths(dirs) : null;
                 FastInitPlugin.InfoOptimizationDone = 0;
+                // Two rounds: sets needing no conversion work publish first (directory
+                // order within a round), so already-prepared sets are not stuck behind
+                // slow conversions. Entries insert at their directory position below,
+                // keeping the final levelSetInfos order equal to directory order.
+                bool[] needsWork = new bool[dirs.Count];
+                if (setFiles != null)
+                    for (int i = 0; i < dirs.Count; i++)
+                        needsWork[i] = FastInitPlugin.SetNeedsConversionWork(setFiles[i], FastInitPlugin.RestoreInfoFilesOnStartup);
+                Dictionary<string, int> publishedIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
                 int sets = 0;
-                for (int index = 0; index < dirs.Count; index++)
+                for (int pass = 0; pass < 2; pass++)
                 {
-                    DirectoryInfo dir = dirs[index];
-                    // Conversion is pure managed I/O with no Unity requests; keep it ahead of
-                    // the transition wait so scene changes do not stall the pipeline.
-                    if (setFiles != null && setFiles[index].Count > 0)
+                    for (int index = 0; index < dirs.Count; index++)
                     {
-                        double convertStarted = phase.Elapsed.TotalMilliseconds;
-                        yield return Guard(FastInitPlugin.PrepareSetInfoFiles(dir.Name, setFiles[index]), "info prepare " + dir.Name);
-                        preparationMs += phase.Elapsed.TotalMilliseconds - convertStarted;
-                    }
-                    double pauseStarted = phase.Elapsed.TotalMilliseconds;
-                    while (OnDemandResources.IsTransitioning || PseudoPrefabManager.isInCustomLevel)
-                        yield return null;
-                    timings.PausedMs += phase.Elapsed.TotalMilliseconds - pauseStarted;
-                    InfoLoad load = new InfoLoad();
-                    yield return Guard(FastInitPlugin.LoadInfoSet(dir, load), "catalog " + dir.Name);
-                    timings.Add(dir.Name, load);
-                    if (load.So == null) continue;
-                    DIYLevelAssetBundleManager.levelSetInfos.Add(
-                        new KeyValuePair<string, LevelSetInfoSO>(dir.FullName, load.So));
-                    double snapshotStarted = phase.Elapsed.TotalMilliseconds;
-                    FastInitPlugin.Snapshots[dir.FullName] = FastInitPlugin.ReadSnapshot(dir, load.InfoFile);
-                    timings.SnapshotMs += phase.Elapsed.TotalMilliseconds - snapshotStarted;
-                    sets++;
-                    double menuStarted = phase.Elapsed.TotalMilliseconds;
-                    FastInitPlugin.NotifySetAdded();
-                    timings.MenuMs += phase.Elapsed.TotalMilliseconds - menuStarted;
-                    FastInitPlugin.Log.LogInfo("level set [" + dir.Name + "] ready (" + sets + " total, metadata only)");
-                    if (slice.Elapsed.TotalMilliseconds >= 4)
-                    {
-                        double yieldStarted = phase.Elapsed.TotalMilliseconds;
-                        yield return null;
-                        timings.YieldWaitMs += phase.Elapsed.TotalMilliseconds - yieldStarted;
-                        slice.Reset();
-                        slice.Start();
+                        if (needsWork[index] != (pass == 1)) continue;
+                        DirectoryInfo dir = dirs[index];
+                        // Conversion is pure managed I/O with no Unity requests; keep it ahead of
+                        // the transition wait so scene changes do not stall the pipeline.
+                        if (setFiles != null && setFiles[index].Count > 0)
+                        {
+                            double convertStarted = phase.Elapsed.TotalMilliseconds;
+                            yield return Guard(FastInitPlugin.PrepareSetInfoFiles(dir.FullName, setFiles[index]), "info prepare " + dir.Name);
+                            preparationMs += phase.Elapsed.TotalMilliseconds - convertStarted;
+                        }
+                        double pauseStarted = phase.Elapsed.TotalMilliseconds;
+                        while (OnDemandResources.IsTransitioning || PseudoPrefabManager.isInCustomLevel)
+                            yield return null;
+                        timings.PausedMs += phase.Elapsed.TotalMilliseconds - pauseStarted;
+                        InfoLoad load = new InfoLoad();
+                        yield return Guard(FastInitPlugin.LoadInfoSet(dir, load), "catalog " + dir.Name);
+                        timings.Add(dir.Name, load);
+                        if (load.So == null) continue;
+                        // Insert at the directory-order position; quick sets append while
+                        // slow sets slot in before already-published later directories.
+                        List<KeyValuePair<string, LevelSetInfoSO>> infos = DIYLevelAssetBundleManager.levelSetInfos;
+                        int insertAt = 0;
+                        while (insertAt < infos.Count)
+                        {
+                            int publishedAt;
+                            if (!publishedIndex.TryGetValue(infos[insertAt].Key, out publishedAt) || publishedAt >= index) break;
+                            insertAt++;
+                        }
+                        KeyValuePair<string, LevelSetInfoSO> entry =
+                            new KeyValuePair<string, LevelSetInfoSO>(dir.FullName, load.So);
+                        double menuStarted = phase.Elapsed.TotalMilliseconds;
+                        if (insertAt == infos.Count)
+                        {
+                            infos.Add(entry);
+                            FastInitPlugin.NotifySetAdded();
+                        }
+                        else
+                        {
+                            infos.Insert(insertAt, entry);
+                            FastInitPlugin.HealLevelSetButtons();
+                        }
+                        publishedIndex[dir.FullName] = index;
+                        timings.MenuMs += phase.Elapsed.TotalMilliseconds - menuStarted;
+                        double snapshotStarted = phase.Elapsed.TotalMilliseconds;
+                        FastInitPlugin.Snapshots[dir.FullName] = FastInitPlugin.ReadSnapshot(dir, load.InfoFile);
+                        timings.SnapshotMs += phase.Elapsed.TotalMilliseconds - snapshotStarted;
+                        sets++;
+                        FastInitPlugin.Log.LogInfo("level set [" + dir.Name + "] ready (" + sets + " total, metadata only)");
+                        if (slice.Elapsed.TotalMilliseconds >= 4)
+                        {
+                            double yieldStarted = phase.Elapsed.TotalMilliseconds;
+                            yield return null;
+                            timings.YieldWaitMs += phase.Elapsed.TotalMilliseconds - yieldStarted;
+                            slice.Reset();
+                            slice.Start();
+                        }
                     }
                 }
                 catalogMs = phase.Elapsed.TotalMilliseconds;

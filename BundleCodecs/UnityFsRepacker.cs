@@ -166,6 +166,23 @@ namespace DIYLevelFastInit.BundleCodecs
             catch (System.Security.SecurityException) { return false; }
         }
 
+        // Only LZMA data is worth converting: native LZMA decode is the slow path,
+        // while raw/LZ4/LZ4HC blocks decode fast enough to keep as-is. True iff the
+        // data section is the supported single-block LZMA layout.
+        internal static bool NeedsConversion(string path)
+        {
+            try
+            {
+                using (FileStream stream = OpenSource(path)) return ReadLayout(stream).Properties != null;
+            }
+            catch (System.IO.IsolatedStorage.IsolatedStorageException) { return false; }
+            catch (IOException) { return false; }
+            catch (UnauthorizedAccessException) { return false; }
+            catch (ArgumentException) { return false; }
+            catch (NotSupportedException) { return false; }
+            catch (System.Security.SecurityException) { return false; }
+        }
+
         internal static void ValidateConverted(string source, string output, ConversionResult result, Func<bool> cancelled)
         {
             if (result == null || result.SourceLength <= 0 || result.SourceLength > MaxBytes

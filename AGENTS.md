@@ -105,13 +105,22 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   `FastInitHost` loads the remaining `common*` dependencies in the background.
   `IsInitialized` (= `commonBundle != null`) must become true synchronously because the
   original consumer patches check it. Initialization is idempotent.
-- Discovery processes sets one at a time in directory order, pipelined per set:
-  the set's startup conversion batch drains (workers exited, work directory
-  cleaned) immediately before its `LoadInfoSet` runs, then the set publishes to
-  `levelSetInfos` and the menu right away, so "More Levels" fills in while later
-  sets still prepare. `InfoFilesPreparing` marks only the active batch window:
+- Discovery processes sets one at a time, pipelined per set: the set's startup
+  conversion batch drains (workers exited, work directory cleaned) immediately
+  before its `LoadInfoSet` runs, then the set publishes to `levelSetInfos` and
+  the menu right away, so "More Levels" fills in while later sets still prepare.
+  A header-only probe (`SetNeedsConversionWork`, mirroring the batch's own
+  classification without creating work directories) splits startup into two
+  rounds: sets needing no conversion work publish first (directory order within
+  a round) so already-prepared sets are not stuck behind slow conversions; sets
+  needing work follow. Published entries insert at their directory position
+  (a slow set slots in before already-published later directories, rebuilding
+  the open menu via `HealLevelSetButtons`), keeping the completed
+  `levelSetInfos` order equal to directory order; during startup the partial
+  list stays a subsequence of directory order.
+  `InfoFilesPreparing` marks only the active batch window:
   it is false between batches, which is what keeps `LoadInfoSet`'s native
-  fallback (the `InfoFilesPreparing` waits/throws in the info bundle loader)
+  fallback (the pending-file waits/throws in the info bundle loader)
   deadlock-free. Do not run conversion batches for several sets concurrently
   with catalog requests. `LoadInfoSet` first tries
   `LevelCatalogCache`. On a miss, `CatalogMetadataRequest` reads scalar fields directly
@@ -432,9 +441,11 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 - The owner authorized replacing level-set UnityFS bundles, including `info*`, scene
   `s_*` and auxiliary files such as `custom_recipes`. Read only the eight-byte UnityFS
   signature when enumerating the set's top-level files; skip other formats and children.
-  `InfoBundleOptimizer`
-  converts supported single-block LZMA and bounded single/multi-block LZ4/raw inputs to
-  LZ4HC, including ordinary independent LZ4 produced by older versions, and atomically replaces their original
+  Only LZMA-compressed data triggers conversion, because native LZMA decode is the slow
+  path; raw/LZ4/LZ4HC layouts decode fast and are kept as-is (`NeedsConversion`, logged
+  as `FastLayout`, counted separately in the batch summary). `InfoBundleOptimizer`
+  converts supported single-block LZMA inputs to
+  LZ4HC and atomically replaces their original
   paths only after `ValidateConverted` checks output/source file hashes, complete
   decoded-data hash, block bounds and equivalent versions/CAB/node metadata.
 - Generated independent blocks use HC compression flag `0x03`, never the source's Streamed
@@ -454,12 +465,17 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   until every queued/running block and file worker has exited, including disposal.
   Never call Unity or BepInEx from a worker.
 - Startup conversion runs as one batch per level set, immediately before that set's
-  catalog request; no info graph/catalog/preview/native request may touch a set whose
-  batch is still running, and `InfoFilesPreparing` is true only while some batch is
-  active. Entering an already-published set during a later set's conversion window is
-  blocked by the flag as before; a cross-set dependency held open by native code can
-  make that later file's replacement fail for this startup (original retained, retried
-  next startup) — verified content-equivalent replacement keeps this benign.
+  catalog request; `InfoFilesPreparing` is true only while some batch is active, and
+  blocking is per file (`InfoBundleOptimizationBatch.IsPending` /
+  `FastInitPlugin.InfoFilePreparing`): a set whose batch is still running stays
+  unpublished, and info-bundle/native readers wait or throw only for files the active
+  batch still owns. Entering, previewing and selecting an already-published set during
+  a later set's conversion window is allowed; `PreparingSetDirectory` identifies the
+  converting set for the set-level gates. A cross-set dependency held open by native
+  code can make that later file's replacement fail for this startup (original
+  retained, retried next startup) — verified content-equivalent replacement keeps
+  this benign. Refresh batches span several changed sets, leave `PreparingSetDirectory`
+  null and keep their global `Syncing` blocking.
   Keep synchronous `common` initialization and IsInitialized timing unchanged. Hot
   refresh must drain native requests and release affected resources before replacement.
   Early remote DIY messages may use a basename-only
@@ -491,7 +507,8 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   recorded optimized hash, validates the original backup, and preserves the displaced
   optimized copy. It covers surviving historical backups only; successful new conversions
   retain no restorable original. Never restore over a later map update or corrupt record.
-- Existing all-HC (`0x03`) layouts skip conversion after bounded structural checks.
+- Existing all-HC (`0x03`) and fast raw/LZ4 layouts skip conversion after bounded
+  structural checks; conversion outputs remain LZ4HC.
   Do not rewrite their timestamps each startup. File-length/mtime fingerprints must
   invalidate catalog, graph and thumbnail data naturally when replacement occurs.
 - If no work directory exists, classify HC/unsupported inputs without creating it
@@ -524,7 +541,9 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 
 - Target framework net35 / C# 7.3: no ValueTuples, no `yield` inside try/catch.
 - `levelSetInfos` order must remain directory order — the arcade mod maps level-set
-  selection by list position.
+  selection by list position. Fast-first startup inserts later conversions at their
+  directory position, so the completed list (and any partial startup list) preserves
+  directory order; never reorder published entries by completion time alone.
 - Plugin dir must be resolved from `typeof(DIYLevelAssetBundleManager).Assembly.Location`,
   never `GetExecutingAssembly()` (would point at this plugin's own directory).
 - Keep `common*` bundles loaded before consuming `info_*` bundles (dependency resolution).
@@ -570,7 +589,7 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 ## Publishing rule
 
 Test builds append an incrementing fourth component to the latest approved release
-version. The approved release is `1.9.5`, so subsequent tests use `1.9.5.x`.
+version. The approved release is `1.9.6`, so subsequent tests use `1.9.6.x`.
 Changing the three-component release version requires the user's explicit approval.
 Keep historical test commits under their original test versions.
 

@@ -34,7 +34,7 @@ namespace DIYLevelFastInit
 
         internal static IEnumerator LoadCatalogBundle(string path, Box<AssetBundle> result)
         {
-            while (FastInitPlugin.InfoFilesPreparing) yield return null;
+            while (FastInitPlugin.InfoFilePreparing(path)) yield return null;
             _catalogBundles = InfoBundleGraph.Required(path, null);
             foreach (string required in _catalogBundles)
                 yield return EnsureInfoBundleAsync(required);
@@ -43,7 +43,7 @@ namespace DIYLevelFastInit
 
         private static IEnumerator EnsureInfoBundleAsync(string path, int priority = 0)
         {
-            while (FastInitPlugin.InfoFilesPreparing) yield return null;
+            while (FastInitPlugin.InfoFilePreparing(path)) yield return null;
             if (QichiResources.IsRequired(path)) yield return QichiResources.EnsureAsync();
             if (InfoBundles.ContainsKey(path)) yield break;
             AssetBundleCreateRequest request;
@@ -77,7 +77,7 @@ namespace DIYLevelFastInit
 
         private static AssetBundle GetInfoBundle(string path)
         {
-            if (FastInitPlugin.InfoFilesPreparing) throw new InvalidOperationException("DIY info bundle files are being prepared; retry after startup completes");
+            if (FastInitPlugin.InfoFilePreparing(path)) throw new InvalidOperationException("DIY info bundle file is being prepared; retry after startup completes");
             if (QichiResources.IsRequired(path)) QichiResources.Ensure();
             AssetBundle bundle;
             if (InfoBundles.TryGetValue(path, out bundle)) return bundle;
@@ -130,12 +130,12 @@ namespace DIYLevelFastInit
 
         private static LoadedSet LoadSet(string path, string scene = null)
         {
-            if (FastInitPlugin.InfoFilesPreparing) throw new InvalidOperationException("DIY info bundle files are being prepared; retry after startup completes");
             LoadedSet loaded;
             bool exists = Sets.TryGetValue(path, out loaded);
             if (exists && scene != null && loaded.SceneDependencies.ContainsKey(scene) && loaded.LoadedLevels.ContainsKey(scene)) return loaded;
             List<FileInfo> files = FastInitHost.SafeGetFiles(new DirectoryInfo(path), "info*");
             if (files.Count == 0) throw new FileNotFoundException("Missing info bundle", path);
+            if (FastInitPlugin.InfoFilePreparing(files[0].FullName)) throw new InvalidOperationException("DIY info bundle file is being prepared; retry after startup completes");
             HashSet<string> required = InfoBundleGraph.Required(files[0].FullName,
                 scene == null ? null : Path.Combine(path, scene));
             try

@@ -27,7 +27,7 @@ namespace DIYLevelFastInit
 
         private static bool PreviewPrefix(Image __0, LevelInfoSO level)
         {
-            if (FastInitPlugin.InfoFilesPreparing || FastInitPlugin.Syncing) return false;
+            if (FastInitPlugin.Syncing) return false;
             if (__0 == null) return true;
             if (level == null)
             {
@@ -37,7 +37,10 @@ namespace DIYLevelFastInit
             }
             if (FastInitPlugin.Syncing || IsTransitioning || PseudoPrefabManager.isInCustomLevel) return true;
             string path;
-            if (!FindCatalogLevel(level, out path)) return true;
+            if (!FindCatalogLevel(level, out path)) return !FastInitPlugin.InfoFilesPreparing;
+            // Published sets preview while another set's conversion batch runs; the
+            // set still being converted keeps its previews suppressed.
+            if (FastInitPlugin.InfoSetPreparing(path)) return false;
             if (_previewRequest != null && ReferenceEquals(_previewRequest.Image, __0)
                 && ReferenceEquals(_previewRequest.Level, level)) return false;
             ThumbnailCache.Hide(__0);
@@ -54,7 +57,7 @@ namespace DIYLevelFastInit
         {
             return ReferenceEquals(_previewRequest, request) && request.Image != null && request.Level != null
                 && request.Image.transform.parent != null && request.Image.transform.parent.gameObject.activeInHierarchy
-                && !FastInitPlugin.InfoFilesPreparing && !FastInitPlugin.Syncing && !IsTransitioning && !PseudoPrefabManager.isInCustomLevel;
+                && !FastInitPlugin.InfoSetPreparing(request.Path) && !FastInitPlugin.Syncing && !IsTransitioning && !PseudoPrefabManager.isInCustomLevel;
         }
 
         private static IEnumerator PreviewRoutine()
