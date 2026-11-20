@@ -1,36 +1,22 @@
-# 1.9.6.2
+# 1.9.7
 
 ## 中文
 
-测试版：修复右上角角标在 checking 与加载状态间疯狂闪烁。
+启动检查不再阻塞已就绪的关卡集：无需转换的集合优先出现在"更多关卡"，转换期间即可进入已发布的关卡。
 
-- checking 文案加入 0.5 秒防抖：快速轮中毫秒级的逐集合检查不再切换角标，稳定显示"DIY levels loading x/y"；慢速转换超过 0.5 秒才显示文件进度。刷新批次同样受益。
-- 进图进度（DIY level preparing）优先级提升到后台 checking 之上：checking 期间进图时稳定显示进图进度。
-
-## English
-
-Test build: fixes the corner label flickering rapidly between the checking and loading states.
-
-- The checking text is debounced for 0.5 s: millisecond per-set checks in the fast round no longer toggle the label, which stays on "DIY levels loading x/y"; slow conversions show file progress only after passing the delay. Refresh batches benefit likewise.
-- Level entry progress (DIY level preparing) now outranks background checking, so entering a level during checking shows a stable entry line.
-
-# 1.9.6.1
-
-## 中文
-
-测试版：启动检查不再阻塞已就绪的关卡集。
-
-- 无需转换的关卡集（此前已检查过）优先发布：启动先按目录序编目发布所有"无需转换"的集合，再处理需要转换的集合，已就绪的集合不再被排在后面的大转换卡住。最终"更多关卡"列表顺序仍与目录顺序一致（需要转换的集合稍后插入其目录位置，菜单相应重建）。
+- 无需转换的关卡集（此前已检查过或本就是 raw/LZ4 布局）优先发布：启动先按目录序编目发布所有无需转换的集合，再处理需要 LZMA 转换的集合，已就绪的集合不再被排在后面的大转换卡住。最终"更多关卡"列表顺序仍与目录顺序一致（需要转换的集合稍后插入其目录位置，菜单相应重建）。
 - 仅 LZMA 数据仍触发转换（原生 LZMA 解压慢）；raw/LZ4 布局解压已足够快，保留原文件不再转换为 LZ4HC（日志计为 fast 项）。触发转换的产物仍为 LZ4HC。
 - 转换（`DIY info checking`）期间即可进入、预览已发布的关卡集：门禁从"整个检查期间全局阻塞"改为按文件/按集合阻塞，只有活动批次仍持有的文件才等待。跨集合依赖若被游戏占用导致替换失败，仍保留原文件并下次启动重试（内容等价，无副作用）。
+- 修复右上角角标在 checking 与加载状态间疯狂闪烁：checking 文案加入 0.5 秒防抖，进图进度优先级提升到后台 checking 之上。
 
 ## English
 
-Test build: startup checking no longer blocks already-prepared level sets.
+Startup checking no longer blocks already-prepared level sets: sets needing no conversion appear in "More Levels" first, and published sets can be entered while conversion still runs.
 
-- Sets needing no conversion (previously checked) publish first: startup catalogues and publishes every no-work set in directory order before processing sets that still need conversion, so ready sets are no longer stuck behind large conversions queued ahead of them. The completed "More Levels" list still matches directory order (later conversions insert at their directory position, rebuilding the open menu).
+- Sets needing no conversion (previously checked, or already raw/LZ4 layouts) publish first: startup catalogues and publishes every no-work set in directory order before processing sets that still need LZMA conversion, so ready sets are no longer stuck behind large conversions queued ahead of them. The completed "More Levels" list still matches directory order (later conversions insert at their directory position, rebuilding the open menu).
 - Only LZMA data still triggers conversion (native LZMA decode is slow); raw/LZ4 layouts decode fast enough and are kept as-is instead of being rewritten to LZ4HC (logged as a separate fast count). Conversions that do trigger still produce LZ4HC.
 - Published sets can be entered and previewed while conversion (`DIY info checking`) is still running: gating moves from a global block for the whole checking phase to per-file/per-set blocking, waiting only for files the active batch still owns. A cross-set dependency held open by the game that makes a replacement fail still keeps the original and retries next startup (content-equivalent, no side effects).
+- Fixes the corner label flickering rapidly between checking and loading states: the checking text is debounced for 0.5 s, and level entry progress now outranks background checking.
 
 # 1.9.6
 
