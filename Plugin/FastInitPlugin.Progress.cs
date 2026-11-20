@@ -8,11 +8,19 @@ namespace DIYLevelFastInit
 {
     public partial class FastInitPlugin
     {
+        // Quick per-set checks last milliseconds; surface the checking line only
+        // once a batch runs past this so the corner label never flickers.
+        private const float InfoProgressDelaySeconds = 0.5f;
 
         private void OnGUI()
         {
             bool catalogLoading = !QuietDirectoryRefresh && Loading && (Syncing || TotalSets > 0);
             string infoPreparing = QuietDirectoryRefresh ? null : InfoOptimizationProgress;
+            if (infoPreparing != null
+                && Time.realtimeSinceStartup - InfoOptimizationStartedRealtime < InfoProgressDelaySeconds)
+            {
+                infoPreparing = null;
+            }
             string levelLoading = OnDemandResources.LevelLoadProgress;
             bool thumbnails = !QuietDirectoryRefresh && OnDemandResources.WarmingThumbnails
                 && !OnDemandResources.IsTransitioning && !PseudoPrefabManager.isInCustomLevel;
@@ -31,8 +39,9 @@ namespace DIYLevelFastInit
                 }
                 List<KeyValuePair<string, LevelSetInfoSO>> infos = DIYLevelAssetBundleManager.levelSetInfos;
                 int done = (infos != null) ? infos.Count : 0;
-                string text = infoPreparing != null ? "DIY info " + infoPreparing
-                    : levelLoading != null ? "DIY level preparing " + levelLoading
+                // Foreground level entry outranks background conversion progress.
+                string text = levelLoading != null ? "DIY level preparing " + levelLoading
+                    : infoPreparing != null ? "DIY info " + infoPreparing
                     : catalogLoading ? (Syncing ? "DIY levels refreshing" : "DIY levels loading " + done + "/" + TotalSets)
                     : "DIY previews caching " + OnDemandResources.ThumbnailDone + "/" + OnDemandResources.ThumbnailTotal;
                 Rect rect = new Rect(Screen.width - 336, 6, 330, 26);

@@ -100,6 +100,7 @@ namespace DIYLevelFastInit
             {
                 _infoOptimization = batch;
                 InfoFilesPreparing = true;
+                InfoOptimizationStartedRealtime = Time.realtimeSinceStartup;
                 InfoOptimizationDone = 0;
                 InfoOptimizationTotal = paths.Count;
                 Log.LogInfo("refresh bundle optimization started: " + paths.Count + " files");

@@ -1,3 +1,19 @@
+# 1.9.6.2
+
+## 中文
+
+测试版：修复右上角角标在 checking 与加载状态间疯狂闪烁。
+
+- checking 文案加入 0.5 秒防抖：快速轮中毫秒级的逐集合检查不再切换角标，稳定显示"DIY levels loading x/y"；慢速转换超过 0.5 秒才显示文件进度。刷新批次同样受益。
+- 进图进度（DIY level preparing）优先级提升到后台 checking 之上：checking 期间进图时稳定显示进图进度。
+
+## English
+
+Test build: fixes the corner label flickering rapidly between the checking and loading states.
+
+- The checking text is debounced for 0.5 s: millisecond per-set checks in the fast round no longer toggle the label, which stays on "DIY levels loading x/y"; slow conversions show file progress only after passing the delay. Refresh batches benefit likewise.
+- Level entry progress (DIY level preparing) now outranks background checking, so entering a level during checking shows a stable entry line.
+
 # 1.9.6.1
 
 ## 中文

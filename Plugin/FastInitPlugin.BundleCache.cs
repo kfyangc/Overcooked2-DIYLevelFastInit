@@ -88,6 +88,7 @@ namespace DIYLevelFastInit
                 _infoOptimization = batch;
                 InfoFilesPreparing = true;
                 PreparingSetDirectory = setDirectory;
+                InfoOptimizationStartedRealtime = UnityEngine.Time.realtimeSinceStartup;
                 InfoOptimizationProgress = (RestoreInfoFilesOnStartup ? "restoring " : "checking ")
                     + InfoOptimizationDone + "/" + InfoOptimizationTotal;
                 Log.LogInfo("startup level bundle " + (RestoreInfoFilesOnStartup ? "restoration" : "optimization")
