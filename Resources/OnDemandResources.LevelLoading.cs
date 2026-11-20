@@ -61,7 +61,14 @@ namespace DIYLevelFastInit
         private static bool LoadPrefix(string sceneName)
         {
             if (ResourceFailures.FailureGate.Active) return false;
-            if (FastInitPlugin.InfoFilesPreparing) throw new InvalidOperationException("DIY info bundles are being prepared; wait for startup to finish");
+            if (FastInitPlugin.InfoFilesPreparing)
+            {
+                // Published sets enter while later sets still convert; only unpublished
+                // targets (or the set being converted itself) must wait.
+                string preparing;
+                if (!TryFindScenePath(sceneName, out preparing) || FastInitPlugin.InfoSetPreparing(preparing))
+                    throw new InvalidOperationException("DIY info bundles are being prepared; wait for startup to finish");
+            }
             if (FastInitPlugin.Syncing) throw new InvalidOperationException("DIY catalog refresh is in progress; retry after it completes");
             ResourceFailures.PreparationFailureNotice.BeginAttempt(sceneName);
             try { PrepareLevel(sceneName); }
@@ -80,7 +87,14 @@ namespace DIYLevelFastInit
         {
             if (ResourceFailures.FailureGate.Active) return false;
             if (_resumeServerLoad) return true;
-            if (FastInitPlugin.InfoFilesPreparing) return false;
+            if (FastInitPlugin.InfoFilesPreparing)
+            {
+                // A published set can enter while another set's conversion batch runs;
+                // its own files settled before publication. Unpublished targets keep
+                // the old quiet drop until their set appears in the catalog.
+                string published;
+                if (!TryFindScenePath(sceneName, out published)) return false;
+            }
             if (FastInitPlugin.Syncing) throw new InvalidOperationException("DIY catalog refresh is in progress; retry after it completes");
             if (_serverPreparing)
             {

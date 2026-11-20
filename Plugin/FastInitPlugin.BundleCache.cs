@@ -17,7 +17,7 @@ namespace DIYLevelFastInit
                 UseDirectCatalogReader = Config.Bind("Loading", "EnableDirectCatalogReader", true,
                     "Build missing catalog files by reading scalar metadata without native info assets. Unsupported bundles fall back to the native scanner. Restart after changing this option.").Value;
                 OptimizeInfoFilesOnStartup = Config.Bind("Loading", "OptimizeInfoBundlesOnStartup", true,
-                    "Check all top-level UnityFS bundles in custom level sets, including info*, s_* and custom_recipes, and replace supported LZMA/LZ4/raw files with equivalent LZ4HC files before discovering levels. Verified replacements do not retain original files. Restart after changing this option.").Value;
+                    "Check all top-level UnityFS bundles in custom level sets, including info*, s_* and custom_recipes, and replace LZMA-compressed files with equivalent LZ4HC files before discovering levels; fast raw/LZ4 layouts are kept as-is. Verified replacements do not retain original files. Restart after changing this option.").Value;
                 RestoreInfoFilesOnStartup = Config.Bind("Loading", "RestoreOriginalInfoBundlesOnStartup", false,
                     "Restore legacy backed-up original bundles on startup. New successful conversions retain no originals. Restoration takes precedence over optimization. Restart after changing this option.").Value;
                 InfoBundleOptimizationBatch.MemoryBudgetBytes = Math.Max(16, Math.Min(2048, Config.Bind("Loading", "ConversionMemoryBudgetMiB", 800,
@@ -45,17 +45,49 @@ namespace DIYLevelFastInit
             return result;
         }
 
+        // Header-only probe mirroring the batch's own classification: does this set
+        // need real conversion/restore work? Creates no work directory or lock files.
+        internal static bool SetNeedsConversionWork(List<string> paths, bool restore)
+        {
+            foreach (string path in paths)
+            {
+                // Leftover recovery data takes the locked cleanup/hash path.
+                if (Directory.Exists(Path.Combine(Path.GetDirectoryName(path), ".diylevel-fastinit"))) return true;
+                if (restore) continue; // no work directory: NoBackup settles quickly
+                // Only LZMA data converts; raw/LZ4/LZ4HC layouts settle quickly.
+                if (BundleCodecs.UnityFsRepacker.NeedsConversion(path)) return true;
+            }
+            return false;
+        }
+
+        // A file is blocked only while the active batch still owns it; settled files
+        // of other sets stay loadable while their conversion window is open.
+        internal static bool InfoFilePreparing(string path)
+        {
+            InfoBundleOptimizationBatch batch = _infoOptimization;
+            return batch != null && batch.IsPending(path);
+        }
+
+        // A set is blocked only while its own conversion batch is running.
+        internal static bool InfoSetPreparing(string setDirectory)
+        {
+            return InfoFilesPreparing && setDirectory != null
+                && string.Equals(PreparingSetDirectory, setDirectory, StringComparison.OrdinalIgnoreCase);
+        }
+
         // Per-set startup conversion: this set's files are fully converted (workers
         // drained, work directory cleaned) before its catalog request runs, so the
         // set can publish to the level-set menu immediately (see FastInitHost.LoadHeavy).
-        internal static IEnumerator PrepareSetInfoFiles(string setName, List<string> paths)
+        internal static IEnumerator PrepareSetInfoFiles(string setDirectory, List<string> paths)
         {
+            string setName = Path.GetFileName(setDirectory);
             InfoBundleOptimizationBatch batch = null;
             try
             {
                 batch = new InfoBundleOptimizationBatch(paths.ToArray(), RestoreInfoFilesOnStartup);
                 _infoOptimization = batch;
                 InfoFilesPreparing = true;
+                PreparingSetDirectory = setDirectory;
                 InfoOptimizationProgress = (RestoreInfoFilesOnStartup ? "restoring " : "checking ")
                     + InfoOptimizationDone + "/" + InfoOptimizationTotal;
                 Log.LogInfo("startup level bundle " + (RestoreInfoFilesOnStartup ? "restoration" : "optimization")
@@ -77,6 +109,7 @@ namespace DIYLevelFastInit
                 if (batch == null || batch.Done)
                 {
                     InfoFilesPreparing = false;
+                    PreparingSetDirectory = null;
                     InfoOptimizationProgress = null;
                     if (ReferenceEquals(_infoOptimization, batch)) _infoOptimization = null;
                 }
@@ -91,6 +124,7 @@ namespace DIYLevelFastInit
             if (batch == null)
             {
                 InfoFilesPreparing = false;
+                PreparingSetDirectory = null;
                 InfoOptimizationProgress = null;
                 return;
             }
@@ -99,6 +133,7 @@ namespace DIYLevelFastInit
                 batch.Dispose();
                 _infoOptimization = null;
                 InfoFilesPreparing = false;
+                PreparingSetDirectory = null;
                 InfoOptimizationProgress = null;
             }
         }
@@ -111,6 +146,7 @@ namespace DIYLevelFastInit
                 if (ReferenceEquals(_infoOptimization, batch))
                 {
                     InfoFilesPreparing = false;
+                    PreparingSetDirectory = null;
                     InfoOptimizationProgress = null;
                 }
                 return;

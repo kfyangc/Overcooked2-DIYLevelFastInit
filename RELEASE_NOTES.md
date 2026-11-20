@@ -1,3 +1,21 @@
+# 1.9.6.1
+
+## 中文
+
+测试版：启动检查不再阻塞已就绪的关卡集。
+
+- 无需转换的关卡集（此前已检查过）优先发布：启动先按目录序编目发布所有"无需转换"的集合，再处理需要转换的集合，已就绪的集合不再被排在后面的大转换卡住。最终"更多关卡"列表顺序仍与目录顺序一致（需要转换的集合稍后插入其目录位置，菜单相应重建）。
+- 仅 LZMA 数据仍触发转换（原生 LZMA 解压慢）；raw/LZ4 布局解压已足够快，保留原文件不再转换为 LZ4HC（日志计为 fast 项）。触发转换的产物仍为 LZ4HC。
+- 转换（`DIY info checking`）期间即可进入、预览已发布的关卡集：门禁从"整个检查期间全局阻塞"改为按文件/按集合阻塞，只有活动批次仍持有的文件才等待。跨集合依赖若被游戏占用导致替换失败，仍保留原文件并下次启动重试（内容等价，无副作用）。
+
+## English
+
+Test build: startup checking no longer blocks already-prepared level sets.
+
+- Sets needing no conversion (previously checked) publish first: startup catalogues and publishes every no-work set in directory order before processing sets that still need conversion, so ready sets are no longer stuck behind large conversions queued ahead of them. The completed "More Levels" list still matches directory order (later conversions insert at their directory position, rebuilding the open menu).
+- Only LZMA data still triggers conversion (native LZMA decode is slow); raw/LZ4 layouts decode fast enough and are kept as-is instead of being rewritten to LZ4HC (logged as a separate fast count). Conversions that do trigger still produce LZ4HC.
+- Published sets can be entered and previewed while conversion (`DIY info checking`) is still running: gating moves from a global block for the whole checking phase to per-file/per-set blocking, waiting only for files the active batch still owns. A cross-set dependency held open by the game that makes a replacement fail still keeps the original and retries next startup (content-equivalent, no side effects).
+
 # 1.9.6
 
 ## 中文

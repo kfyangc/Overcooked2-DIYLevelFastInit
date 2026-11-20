@@ -10,7 +10,7 @@ namespace DIYLevelFastInit
     /// <summary>Replaces UnityFS level bundles atomically, discarding originals only after verification.</summary>
     internal static class InfoBundleOptimizer
     {
-        internal enum Result { Replaced, AlreadyOptimized, Unsupported, Failed, Restored, NoBackup }
+        internal enum Result { Replaced, AlreadyOptimized, Unsupported, Failed, Restored, NoBackup, FastLayout }
 
         private sealed class Record
         {
@@ -64,6 +64,11 @@ namespace DIYLevelFastInit
                         Log(log, "level bundle source layout unsupported or unavailable; original retained: " + source);
                         return Result.Unsupported;
                     }
+                    if (!UnityFsRepacker.NeedsConversion(source))
+                    {
+                        Log(log, "level bundle layout already fast (raw/LZ4); original kept: " + source);
+                        return Result.FastLayout;
+                    }
                 }
                 Directory.CreateDirectory(directory);
                 using (IDisposable guard = Lock(directory, source))
@@ -83,6 +88,11 @@ namespace DIYLevelFastInit
                     {
                         Log(log, "level bundle source layout unsupported or unavailable; original retained: " + source);
                         return Result.Unsupported;
+                    }
+                    if (!UnityFsRepacker.NeedsConversion(source))
+                    {
+                        Log(log, "level bundle layout already fast (raw/LZ4); original kept: " + source);
+                        return Result.FastLayout;
                     }
                     if (!CleanupOriginals(source, directory, cancelled, log)) return Result.Failed;
                     FileInfo stamp = new FileInfo(source);

@@ -31,10 +31,11 @@ namespace DIYLevelFastInit
         private readonly List<PreparedFile> _prepared = new List<PreparedFile>();
         private readonly List<string> _activePaths = new List<string>();
         private readonly List<FileWork> _files = new List<FileWork>();
+        private readonly HashSet<string> _settled = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         private Thread _worker;
         private volatile BundleWorkScheduler _scheduler;
         private volatile bool _cancelled, _done;
-        private int _completed, _failed, _replaced, _ready, _skipped, _restored;
+        private int _completed, _failed, _replaced, _ready, _skipped, _restored, _fast;
         private int _inFlight, _nextFile, _peakFiles, _memoryWaits;
         private long _reserved, _peakReserved;
 
@@ -56,6 +57,21 @@ namespace DIYLevelFastInit
         }
 
         internal bool Done { get { return _done; } }
+
+        // True while this batch still intends to read or replace the file: planned,
+        // queued or running. Settled files (completed, failed planning or foreign to
+        // this batch) no longer block native readers.
+        internal bool IsPending(string path)
+        {
+            if (string.IsNullOrEmpty(path) || _done) return false;
+            string full = Path.GetFullPath(path);
+            bool mine = false;
+            foreach (string candidate in _paths)
+                if (string.Equals(candidate, full, StringComparison.OrdinalIgnoreCase)) { mine = true; break; }
+            if (!mine) return false;
+            lock (_sync) return !_settled.Contains(full);
+        }
+
         internal int Completed { get { return Interlocked.CompareExchange(ref _completed, 0, 0); } }
         internal int Failed { get { return Interlocked.CompareExchange(ref _failed, 0, 0); } }
         internal PreparedFile[] PreparedFiles { get { lock (_sync) return _prepared.ToArray(); } }
@@ -95,13 +111,14 @@ namespace DIYLevelFastInit
             System.Diagnostics.Stopwatch timer = System.Diagnostics.Stopwatch.StartNew();
             try
             {
+                List<FileWork> planned = new List<FileWork>();
                 foreach (string path in _paths)
                 {
                     if (_cancelled) return;
                     try
                     {
                         UnityFsRepacker.WorkPlan plan = UnityFsRepacker.Plan(path, _memoryBudget, _workerCount, _restore);
-                        _files.Add(new FileWork { Path = path, Plan = plan });
+                        planned.Add(new FileWork { Path = path, Plan = plan });
                         Log("level bundle memory plan [" + Path.GetFileName(path) + "]: " + plan.ReservationBytes
                             + " bytes reserved, " + plan.WorkingBytes + " estimated working bytes, parallel=" + plan.Parallel
                             + (plan.Exclusive ? ", oversized file streams exclusively" : ""));
@@ -109,9 +126,13 @@ namespace DIYLevelFastInit
                     catch (Exception error)
                     {
                         Interlocked.Increment(ref _failed); Interlocked.Increment(ref _completed);
+                        lock (_sync) _settled.Add(path); // never touched by this batch
                         Log("level bundle planning failed; original retained [" + path + "]: " + error);
                     }
                 }
+                // Publish the plan list only once complete, so locked readers never
+                // observe a partially planned batch.
+                lock (_sync) _files.AddRange(planned);
                 using (BundleWorkScheduler scheduler = new BundleWorkScheduler(_workerCount))
                 {
                     _scheduler = scheduler;
@@ -135,9 +156,9 @@ namespace DIYLevelFastInit
             finally
             {
                 Log("level bundle " + (_restore ? "restore" : "optimization") + (_cancelled ? " cancelled" : " complete")
-                    + ": " + _replaced + " replaced, " + _ready + " already HC, " + _restored + " restored, "
-                    + _skipped + " skipped, " + _failed + " failed (" + _completed + "/" + _paths.Length + ", "
-                    + StartupTimings.Ms(timer.Elapsed.TotalMilliseconds) + " ms)");
+                    + ": " + _replaced + " replaced, " + _ready + " already HC, " + _fast + " fast (raw/LZ4) kept, "
+                    + _restored + " restored, " + _skipped + " skipped, " + _failed + " failed (" + _completed + "/"
+                    + _paths.Length + ", " + StartupTimings.Ms(timer.Elapsed.TotalMilliseconds) + " ms)");
                 _done = true;
             }
         }
@@ -186,6 +207,7 @@ namespace DIYLevelFastInit
                 {
                     case InfoBundleOptimizer.Result.Replaced: Interlocked.Increment(ref _replaced); break;
                     case InfoBundleOptimizer.Result.AlreadyOptimized: Interlocked.Increment(ref _ready); break;
+                    case InfoBundleOptimizer.Result.FastLayout: Interlocked.Increment(ref _fast); break;
                     case InfoBundleOptimizer.Result.Restored: Interlocked.Increment(ref _restored); break;
                     case InfoBundleOptimizer.Result.Failed: Interlocked.Increment(ref _failed); break;
                     default: Interlocked.Increment(ref _skipped); break;
@@ -203,6 +225,7 @@ namespace DIYLevelFastInit
                 lock (_sync)
                 {
                     _activePaths.Remove(path);
+                    _settled.Add(path); // this batch will not touch the file again
                     _inFlight--; _reserved -= file.Plan.ReservationBytes;
                     try { StartFiles(); }
                     finally { Monitor.PulseAll(_sync); }

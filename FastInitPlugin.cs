@@ -22,7 +22,7 @@ namespace DIYLevelFastInit
     {
         public const string PluginGuid = "oc2.diylevel.fastinit";
         public const string PluginName = "DIYLevel 快速载入 / DIYLevel 启动速度优化 / DIYLevel FastInit";
-        public const string PluginVersion = "1.9.6";
+        public const string PluginVersion = "1.9.6.1";
 
         internal static ManualLogSource Log;
 
@@ -52,6 +52,9 @@ namespace DIYLevelFastInit
         private static GUIStyle _progressStyle;
         internal static bool UseIndividualLevelAssets = true;
         internal static bool InfoFilesPreparing;
+        // Directory of the set whose startup conversion batch is running; null between
+        // batches. Refresh batches span several changed sets and keep the global gate.
+        internal static string PreparingSetDirectory;
         internal static bool OptimizeInfoFilesOnStartup = true;
         internal static bool RestoreInfoFilesOnStartup;
         private static InfoBundleOptimizationBatch _infoOptimization;
