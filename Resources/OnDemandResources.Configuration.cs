@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Reflection.Emit;
+using System.Text;
 using HarmonyLib;
 using LevelEditorStub;
 using OC2DIYLevel;
@@ -54,30 +55,98 @@ namespace DIYLevelFastInit
             LoadSet(path, scene);
             LevelInfoSO full = Resolve(path, scene);
             // Synchronous entry path (client replay/direct callers): no wait window
-            // here, so unresolved recipe references fail precisely before SetupConfig.
-            int unresolved = CountNullRecipes(full);
+            // here, so unresolved references fail precisely before SetupConfig.
+            string unresolvedDetail;
+            int unresolved = CountUnresolvedReferences(full, out unresolvedDetail);
             if (unresolved > 0)
-                throw new IOException("unresolved recipe references: " + scene + " (" + unresolved
-                    + " null refs; shared web bundles " + WLoaderInterop.StateDescription() + ")");
+                throw new IOException("unresolved level references: " + scene + " (" + unresolvedDetail
+                    + "; shared web bundles " + WLoaderInterop.StateDescription() + ")");
             SceneDirectoryData.SceneDirectoryEntry entry = PrepareSessionEntry(scene);
             entry.LoadScreenOverride = full.screenshot;
             foreach (SceneDirectoryData.PerPlayerCountDirectoryEntry variant in entry.SceneVarients) PrepareVariant(full, variant);
             FastInitPlugin.Log.LogInfo("on-demand config ready: " + scene + " (" + Levels.Count + " levels retained)");
         }
 
-        // Counts recipe references that deserialized as null because their target
-        // bundle was not resident when the info asset loaded. SetupConfig consumes
-        // exactly these entries, so any null here becomes its order-dedup NRE.
-        internal static int CountNullRecipes(LevelInfoSO level)
+        // Counts references that SetupConfig dereferences, directly or through
+        // PseudoPrefabManager/RecipeHelper. A null element is always a cross-bundle
+        // reference that deserialized before its target bundle was resident; SetupConfig
+        // turns each of them into its own crash (order dedup, LoadAsset(null), null
+        // orders in the recipe list), so the entry gate treats them all alike.
+        internal static int CountUnresolvedReferences(LevelInfoSO level)
         {
+            string detail;
+            return CountUnresolvedReferences(level, out detail);
+        }
+
+        internal static int CountUnresolvedReferences(LevelInfoSO level, out string detail)
+        {
+            detail = null;
             if (level == null) return 0;
-            ScriptableObject[] recipes = level.recipes;
-            if (recipes == null || recipes.Length == 0) return 0;
-            int count = level.debugRecipeCount == 0 ? recipes.Length : Math.Min(level.debugRecipeCount, recipes.Length);
+            Dictionary<string, int> parts = new Dictionary<string, int>();
+            Accumulate(parts, "recipes", CountNull(level.recipes, RecipeLimit(level)));
+            Accumulate(parts, "recipeListSOs", CountNull(level.recipeListSOs, -1));
+            RecipeListSO[] lists = level.recipeListSOs;
+            if (lists != null)
+                for (int i = 0; i < lists.Length; i++)
+                    if (lists[i] != null) Accumulate(parts, "phaseRecipes", CountNull(lists[i].recipes, -1));
+            Accumulate(parts, "includeRecipeMatchLists", CountNull(level.includeRecipeMatchLists, -1));
+            Accumulate(parts, "optionalRecipeMatchListItems", CountNull(level.optionalRecipeMatchListItems, -1));
+            Accumulate(parts, "allIngredients", CountNull(level.allIngredients, -1));
+            Accumulate(parts, "allCookingSteps", CountNull(level.allCookingSteps, -1));
+            bool horde = level.levelType == LevelInfoSO.LevelType.Horde;
+            LevelConfigSetupPerPlayerCountSO[] variants = { level.config_1p, level.config_2p, level.config_3p, level.config_4p };
+            foreach (LevelConfigSetupPerPlayerCountSO variant in variants)
+            {
+                if (variant == null) { Accumulate(parts, "playerConfigs", 1); continue; }
+                Accumulate(parts, "scriptedRecipes", CountNull(variant.scriptedRecipes, -1));
+                if (!horde) continue;
+                HordeLevelConfigSO hordeConfig = variant.hordeLevelConfig;
+                if (hordeConfig == null || hordeConfig.hordeWaveDataSOs == null) continue;
+                foreach (HordeWaveDataSO wave in hordeConfig.hordeWaveDataSOs)
+                {
+                    if (wave == null) { Accumulate(parts, "hordeWaves", 1); continue; }
+                    Accumulate(parts, "hordeEnemies", CountNull(wave.enemies, -1));
+                    if (wave.recipeListSO == null) { Accumulate(parts, "hordeWaves", 1); continue; }
+                    Accumulate(parts, "hordeRecipes", CountNull(wave.recipeListSO.recipes, -1));
+                }
+            }
             int unresolved = 0;
-            for (int i = 0; i < count; i++)
-                if (recipes[i] == null) unresolved++;
+            foreach (KeyValuePair<string, int> part in parts) unresolved += part.Value;
+            if (unresolved == 0) return 0;
+            StringBuilder text = new StringBuilder();
+            foreach (KeyValuePair<string, int> part in parts)
+            {
+                if (text.Length != 0) text.Append(',');
+                text.Append(part.Key).Append('=').Append(part.Value);
+            }
+            detail = text.ToString();
             return unresolved;
+        }
+
+        // SetupConfig takes debugRecipeCount recipes (Take clamps to the array length).
+        private static int RecipeLimit(LevelInfoSO level)
+        {
+            ScriptableObject[] recipes = level.recipes;
+            if (recipes == null) return 0;
+            return level.debugRecipeCount == 0 ? recipes.Length : Math.Min(level.debugRecipeCount, recipes.Length);
+        }
+
+        private static int CountNull(ScriptableObject[] items, int limit)
+        {
+            if (items == null) return 0;
+            if (limit < 0 || limit > items.Length) limit = items.Length;
+            int unresolved = 0;
+            for (int i = 0; i < limit; i++)
+                if (items[i] == null) unresolved++;
+            return unresolved;
+        }
+
+        private static void Accumulate(Dictionary<string, int> parts, string name, int count)
+        {
+            if (count <= 0) return;
+            int known;
+            parts.TryGetValue(name, out known);
+            parts[name] = known + count;
         }
 
         private static SceneDirectoryData.SceneDirectoryEntry PrepareSessionEntry(string scene)

@@ -242,14 +242,14 @@ namespace DIYLevelFastInit
                 FastInitPlugin.Log.LogInfo(context + "level info asset ready: " + scene + " (" + assetTimer.ElapsedMilliseconds + " ms elapsed)");
             }
             finally { info.Value = null; }
-            // Cross-bundle recipe references deserialize as null while the shared web
-            // dependency bundles are still loading; resolve them before config factories.
-            Box<LevelInfoSO> level = new Box<LevelInfoSO>();
-            level.Value = full;
-            yield return EnsureResolvedRecipes(path, scene, requiredBundles, current, level);
-            if (!current()) yield break;
-            full = level.Value;
-            if (full == null) throw new IOException("Missing selected LevelInfo after recipe resolution: " + scene);
+        // Cross-bundle recipe references deserialize as null while the shared web
+        // dependency bundles are still loading; resolve them before config factories.
+        Box<LevelInfoSO> level = new Box<LevelInfoSO>();
+        level.Value = full;
+        yield return EnsureResolvedReferences(path, scene, requiredBundles, current, level);
+        if (!current()) yield break;
+        full = level.Value;
+        if (full == null) throw new IOException("Missing selected LevelInfo after reference resolution: " + scene);
             Sets[path].SceneDependencies[scene] = requiredBundles;
             FastInitPlugin.Log.LogInfo("async " + context + "level resources ready: " + scene + " (" + timer.ElapsedMilliseconds + " ms elapsed)");
             LevelLoadProgress = context + "0/4";
@@ -272,31 +272,35 @@ namespace DIYLevelFastInit
         }
 
         // Waits for the shared web dependency bundles, then reloads the info graph so
-        // null recipe references deserialize again against the now-resident targets.
-        // Two reload attempts cover a settle that completes mid-wait; a persisting null
-        // is a broken dependency and fails with a precise message instead of the
-        // SetupConfig NullReferenceException on order deduplication.
-        private static IEnumerator EnsureResolvedRecipes(string path, string scene, HashSet<string> requiredBundles,
+        // null references deserialize again against the now-resident targets. The
+        // validation covers every reference array SetupConfig consumes (recipes,
+        // includeRecipeMatchLists, optional items, ingredients, steps, per-player
+        // scripted recipes, horde waves); each null would otherwise crash setup with
+        // its own NullReferenceException. Two reload attempts cover a settle that
+        // completes mid-wait; a persisting null is a broken dependency and fails with
+        // a precise message instead.
+        private static IEnumerator EnsureResolvedReferences(string path, string scene, HashSet<string> requiredBundles,
             Func<bool> current, Box<LevelInfoSO> full)
         {
-            int unresolved = CountNullRecipes(full.Value);
+            string detail;
+            int unresolved = CountUnresolvedReferences(full.Value, out detail);
             if (unresolved == 0) yield break;
-            FastInitPlugin.Log.LogWarning("level recipe references unresolved: " + scene + " (" + unresolved
-                + " null; shared web bundles " + WLoaderInterop.StateDescription() + ")");
+            FastInitPlugin.Log.LogWarning("level references unresolved: " + scene + " (" + detail
+                + "; shared web bundles " + WLoaderInterop.StateDescription() + ")");
             yield return WLoaderInterop.AwaitSettled();
             if (!current()) yield break;
-            for (int attempt = 1; attempt <= 2 && CountNullRecipes(full.Value) > 0; attempt++)
+            for (int attempt = 1; attempt <= 2 && CountUnresolvedReferences(full.Value) > 0; attempt++)
             {
-                FastInitPlugin.Log.LogInfo("reloading level info to resolve recipe references: " + scene + " (attempt " + attempt + ")");
+                FastInitPlugin.Log.LogInfo("reloading level info to resolve references: " + scene + " (attempt " + attempt + ")");
                 yield return ReloadLevelInfo(path, scene, requiredBundles, current);
                 if (!current()) yield break;
                 LoadedSet set;
                 full.Value = Sets.TryGetValue(path, out set) && set.LoadedLevels.ContainsKey(scene) ? set.LoadedLevels[scene] : null;
             }
-            unresolved = CountNullRecipes(full.Value);
+            unresolved = CountUnresolvedReferences(full.Value, out detail);
             if (unresolved > 0)
-                throw new IOException("unresolved recipe references: " + scene + " (" + unresolved
-                    + " null refs; shared web bundles " + WLoaderInterop.StateDescription()
+                throw new IOException("unresolved level references: " + scene + " (" + detail
+                    + "; shared web bundles " + WLoaderInterop.StateDescription()
                     + ", reinstall the web dependency pack if this repeats)");
         }
 
