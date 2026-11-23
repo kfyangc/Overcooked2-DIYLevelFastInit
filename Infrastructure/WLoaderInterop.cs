@@ -145,34 +145,75 @@ namespace DIYLevelFastInit
                 Release("web loader dependency pipeline not active");
                 yield break;
             }
-            int loaded = 0, skipped = 0, failed = 0;
-            FastInitPlugin.Log.LogInfo("WLoader shared bundles takeover: " + _names.Count + " files from " + _loaderDir);
-            foreach (FileInfo file in OrderedSharedFiles())
+            List<FileInfo> files = new List<FileInfo>(OrderedSharedFiles());
+            List<string> priority = ParsePriorityList();
+            int skipped = 0;
+            List<FileInfo> pending = new List<FileInfo>();
+            List<AssetBundleCreateRequest> requests = new List<AssetBundleCreateRequest>();
+            FastInitPlugin.Log.LogInfo("WLoader shared bundles takeover: " + files.Count
+                + " files (parallel) from " + _loaderDir);
+            foreach (FileInfo file in files)
             {
-                bool resident = false;
                 // Other loaders can finish a bundle while the preceding request is pending.
-                foreach (AssetBundle ab in AssetBundle.GetAllLoadedAssetBundles())
-                    if (string.Equals(ab.name, file.Name, StringComparison.OrdinalIgnoreCase)) { resident = true; break; }
-                if (resident)
+                if (IsResident(file.Name))
                 {
                     skipped++;
                     _settled.Add(file.Name);
                     FastInitPlugin.Log.LogInfo("skip " + file.Name + ": already loaded by another plugin");
                     continue;
                 }
-                Box<AssetBundle> done = new Box<AssetBundle>();
-                System.Diagnostics.Stopwatch watch = System.Diagnostics.Stopwatch.StartNew();
-                yield return FastInitHost.LoadBundleFile(file.FullName, file.Name, done);
-                if (done.Value != null) loaded++;
+                AssetBundleCreateRequest request;
+                try { request = AssetBundle.LoadFromFileAsync(file.FullName); }
+                catch (Exception e)
+                {
+                    FastInitPlugin.Log.LogWarning("WLoader shared bundle request failed [" + file.Name + "]: " + e.Message);
+                    request = null;
+                }
+                if (request == null)
+                {
+                    _settled.Add(file.Name);
+                    continue;
+                }
+                request.priority = PriorityRank(file.Name, priority) < priority.Count ? 100 : 0;
+                requests.Add(request);
+                pending.Add(file);
+            }
+            float started = Time.realtimeSinceStartup;
+            float nextNotice = started + 15f;
+            while (true)
+            {
+                bool allDone = true;
+                for (int i = 0; i < requests.Count; i++)
+                    if (!requests[i].isDone) { allDone = false; break; }
+                if (allDone) break;
+                if (Time.realtimeSinceStartup >= nextNotice)
+                {
+                    FastInitPlugin.Log.LogWarning("WLoader shared bundles still pending after "
+                        + (int)(Time.realtimeSinceStartup - started) + "s; waiting without duplicate requests");
+                    nextNotice += 15f;
+                }
+                yield return null;
+            }
+            int loaded = 0, failed = 0;
+            for (int i = 0; i < requests.Count; i++)
+            {
+                AssetBundle bundle = requests[i].assetBundle;
+                if (bundle == null)
+                {
+                    // Completed failed requests can safely fall back to a sync load.
+                    try { bundle = AssetBundle.LoadFromFile(pending[i].FullName); }
+                    catch (Exception e) { FastInitPlugin.Log.LogWarning("WLoader shared bundle sync retry failed [" + pending[i].Name + "]: " + e.Message); }
+                }
+                if (bundle != null) loaded++;
                 else failed++;
                 // Failed files leave the wait list too: a corrupt dependency cannot be
                 // fixed by waiting, and the recipe validation reports it precisely.
-                _settled.Add(file.Name);
-                FastInitPlugin.Log.LogInfo("WLoader shared bundle timing [" + file.Name + "]: "
-                    + watch.ElapsedMilliseconds + " ms, loaded=" + (done.Value != null));
+                _settled.Add(pending[i].Name);
+                FastInitPlugin.Log.LogInfo("WLoader shared bundle settled [" + pending[i].Name + "]: loaded=" + (bundle != null));
             }
             _drained = true;
-            FastInitPlugin.Log.LogInfo("WLoader shared bundles: " + loaded + " loaded, " + skipped + " skipped (dup), " + failed + " failed");
+            FastInitPlugin.Log.LogInfo("WLoader shared bundles: " + loaded + " loaded, " + skipped + " skipped (dup), "
+                + failed + " failed (" + (int)((Time.realtimeSinceStartup - started) * 1000) + " ms)");
         }
 
         private static IEnumerable<FileInfo> OrderedSharedFiles()
@@ -230,8 +271,8 @@ namespace DIYLevelFastInit
             return _mode != Mode.Off && _names.Count != 0 && !Settled();
         }
 
-        // Waits until the shared bundles settle, the startup pipeline ends without the
-        // takeover pass, or the configured timeout elapses (then gives way).
+        // Waits until the shared bundles settle or the configured timeout elapses
+        // (then gives way; the loading coroutine runs independently of LoadHeavy).
         internal static IEnumerator AwaitSettled()
         {
             if (!WaitingUseful()) yield break;
@@ -240,11 +281,6 @@ namespace DIYLevelFastInit
             float timeout = FastInitPlugin.WLoaderGateTimeoutSeconds;
             while (!Settled())
             {
-                if (_mode == Mode.Takeover && !_drained && !FastInitPlugin.Loading)
-                {
-                    FastInitPlugin.Log.LogWarning("startup finished without the shared bundle takeover pass; giving way");
-                    yield break;
-                }
                 if (Time.realtimeSinceStartup - start >= timeout)
                 {
                     FastInitPlugin.Log.LogWarning("shared web bundle wait timed out after " + (int)timeout + "s; giving way");

@@ -200,9 +200,10 @@ namespace DIYLevelFastInit
                 FastInitPlugin.Log.LogInfo("common bundles: " + loaded + " loaded, " + skipped + " skipped (dup), " + failed + " failed");
 
                 // The web loader's shared commonW* bundles carry cross-bundle recipe
-                // references; load them under this pipeline's scheduling so level
-                // preparation can wait on a known settle state (WLoaderInterop).
-                yield return WLoaderInterop.LoadSharedBundles();
+                // references. Load them on a parallel coroutine (concurrent requests) so
+                // catalog publication is never blocked on them; level preparation gates
+                // on their settle state instead (WLoaderInterop).
+                StartCoroutine(Guard(WLoaderInterop.LoadSharedBundles(), "WLoader shared bundle takeover"));
 
                 phase.Reset();
                 phase.Start();
