@@ -293,10 +293,12 @@ namespace DIYLevelFastInit
                 + "; shared web bundles " + WLoaderInterop.StateDescription() + ")");
             FastInitPlugin.Log.LogInfo("level dependency bundles: " + scene + " -> " + WLoaderInterop.DescribeBundles(bundles));
             // Keep the corner label moving while waiting so the entry never looks frozen.
+            // The label sits next to "DIY level preparing", so it must stay short enough
+            // to fit the corner (the previous "common asset files" wording was truncated).
             yield return WLoaderInterop.AwaitBundles(bundles, (settled, fraction) =>
                 LevelLoadProgress = fraction > 0.01f
-                    ? "common asset files " + settled + "/" + bundles.Count + " " + (int)(fraction * 100f) + "%"
-                    : "common asset files " + settled + "/" + bundles.Count);
+                    ? "common " + settled + "/" + bundles.Count + " " + (int)(fraction * 100f) + "%"
+                    : "common " + settled + "/" + bundles.Count);
             if (!current()) yield break;
             for (int attempt = 1; attempt <= 2 && CountUnresolvedReferences(full.Value) > 0; attempt++)
             {
