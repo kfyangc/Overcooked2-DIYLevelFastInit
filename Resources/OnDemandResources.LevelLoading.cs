@@ -246,7 +246,7 @@ namespace DIYLevelFastInit
         // dependency bundles are still loading; resolve them before config factories.
         Box<LevelInfoSO> level = new Box<LevelInfoSO>();
         level.Value = full;
-        yield return EnsureResolvedReferences(path, scene, requiredBundles, current, level);
+        yield return EnsureResolvedReferences(path, scene, files[0].FullName, requiredBundles, current, level);
         if (!current()) yield break;
         full = level.Value;
         if (full == null) throw new IOException("Missing selected LevelInfo after reference resolution: " + scene);
@@ -271,25 +271,32 @@ namespace DIYLevelFastInit
                 + context + "level entry, " + timer.ElapsedMilliseconds + " ms elapsed)");
         }
 
-        // Waits for the shared web dependency bundles, then reloads the info graph so
-        // null references deserialize again against the now-resident targets. The
+        // Waits only for the shared web packs this level references, then reloads the info
+        // graph so null references deserialize again against the now-resident targets. The
         // validation covers every reference array SetupConfig consumes (recipes,
         // includeRecipeMatchLists, optional items, ingredients, steps, per-player
-        // scripted recipes, horde waves); each null would otherwise crash setup with
-        // its own NullReferenceException. Two reload attempts cover a settle that
-        // completes mid-wait; a persisting null is a broken dependency and fails with
-        // a precise message instead.
-        private static IEnumerator EnsureResolvedReferences(string path, string scene, HashSet<string> requiredBundles,
-            Func<bool> current, Box<LevelInfoSO> full)
+        // scripted recipes, horde waves); each null would otherwise crash setup with its
+        // own NullReferenceException. Two reload attempts cover a settle that completes
+        // mid-wait; a persisting null is a broken dependency and fails with a precise
+        // message instead.
+        private static IEnumerator EnsureResolvedReferences(string path, string scene, string infoFile,
+            HashSet<string> requiredBundles, Func<bool> current, Box<LevelInfoSO> full)
         {
             string detail;
             int unresolved = CountUnresolvedReferences(full.Value, out detail);
             if (unresolved == 0) yield break;
+            // Only the packs this level's info and scene reference must be resident before
+            // setup and scene loading; unrelated shared packs keep loading in the
+            // background instead of blocking entry.
+            HashSet<string> packs = WLoaderInterop.NeededPacks(infoFile, Path.Combine(path, scene));
             FastInitPlugin.Log.LogWarning("level references unresolved: " + scene + " (" + detail
                 + "; shared web bundles " + WLoaderInterop.StateDescription() + ")");
+            FastInitPlugin.Log.LogInfo("level shared dependencies: " + scene + " -> " + WLoaderInterop.DescribePacks(packs));
             // Keep the corner label moving while waiting so the entry never looks frozen.
-            yield return WLoaderInterop.AwaitSettled(resident =>
-                LevelLoadProgress = "shared " + resident + "/" + WLoaderInterop.TotalCount());
+            yield return WLoaderInterop.AwaitPacks(packs, (settled, fraction) =>
+                LevelLoadProgress = fraction > 0.01f
+                    ? "shared " + settled + "/" + packs.Count + " " + (int)(fraction * 100f) + "%"
+                    : "shared " + settled + "/" + packs.Count);
             if (!current()) yield break;
             for (int attempt = 1; attempt <= 2 && CountUnresolvedReferences(full.Value) > 0; attempt++)
             {

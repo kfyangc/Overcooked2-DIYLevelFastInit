@@ -66,7 +66,9 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   - `common bundles: ...`, `level set [...] ready (... metadata only)`,
     `FastInit complete: ...`, `level set menu rebuilt: ...`.
   - `web loader shared bundle takeover armed/released: ...`, `WLoader shared bundles: ...`,
-    `level recipe references unresolved: ...`, `reloading level info to resolve recipe references: ...`.
+    `level references unresolved: ...`, `level shared dependencies: ... -> ...`,
+    `prioritized shared packs for entry: ...`, `shared packs ready after ... ms`,
+    `reloading level info to resolve references: ...`.
   - `catalog cache hit: ...`, `lightweight scene directory: ... no recipe configs`.
   - `on-demand info loaded/released` (resident bundle count),
     `on-demand config ready/released`, `scene runtime objects released`.
@@ -390,13 +392,18 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   `optionalRecipeMatchListItems`, `allIngredients`, `allCookingSteps`, per-player
   `scriptedRecipes`, horde waves/enemies/recipes): null entries are cross-bundle references
   that deserialized against not-yet-resident shared bundles and each one crashes setup on its
-  own. Nulls wait for the settle state while updating the corner label
-  (`shared x/y`), then reload the info graph (`Sets` entry dropped, bundles `Unload(false)`
-  and reloaded) up to twice; persisting nulls fail with a message naming the null fields. The
-  wait is bounded twice: the configured timeout (default 45 s) and a 20 s stall detector, so a
-  hung load fails instead of looking frozen. The synchronous `PrepareLevel` path validates the
-  same fields but cannot wait. Failed takeover files leave the wait list: a corrupt dependency
-  is a reinstall case, not a wait case.
+  own. On a null, entry waits only for the packs the level actually references: the info
+  bundle's and the scene bundle's external CAB references (`InfoBundleGraph.BundleReferences`)
+  are mapped to pack files through each pack's bundle directory
+  (`InfoBundleGraph.CabinetNames`), and still-pending needed requests get priority 100. The
+  remaining packs keep loading in the background. Waits update the corner label
+  (`shared x/y z%`, percent from the pending requests' own progress) and end on the
+  configured timeout (default 60 s) or a 20 s no-progress stall; a scan that cannot run
+  falls back to waiting for every pack, a scan that attributes no pack waits for none.
+  Nulls then reload the info graph (`Sets` entry dropped, bundles `Unload(false)` and
+  reloaded) up to twice; persisting nulls fail with a message naming the null fields. The
+  synchronous `PrepareLevel` path validates the same fields but cannot wait. Failed takeover
+  files leave the wait list: a corrupt dependency is a reinstall case, not a wait case.
 
 ## Selected level assets
 

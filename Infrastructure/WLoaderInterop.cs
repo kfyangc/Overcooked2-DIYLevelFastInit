@@ -31,6 +31,13 @@ namespace DIYLevelFastInit
         private static readonly HashSet<string> _settled = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         // The takeover loading pass in LoadHeavy finished (all names settled).
         private static bool _drained;
+        // Live takeover requests by pack name; entry raises the priority of a level's packs.
+        private static readonly Dictionary<string, AssetBundleCreateRequest> _requests =
+            new Dictionary<string, AssetBundleCreateRequest>(StringComparer.OrdinalIgnoreCase);
+        // CAB name -> shared pack file, built once from the pack bundle directories.
+        private static readonly Dictionary<string, string> _cabPacks =
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        private static bool _cabsIndexed;
 
         internal static void TryInstall()
         {
@@ -173,6 +180,7 @@ namespace DIYLevelFastInit
                     _settled.Add(file.Name);
                     continue;
                 }
+                _requests[file.Name] = request;
                 requests.Add(request);
                 pending.Add(file);
             }
@@ -195,6 +203,7 @@ namespace DIYLevelFastInit
             int loaded = 0, failed = 0;
             for (int i = 0; i < requests.Count; i++)
             {
+                _requests.Remove(pending[i].Name);
                 AssetBundle bundle = requests[i].assetBundle;
                 if (bundle == null)
                 {
@@ -231,66 +240,186 @@ namespace DIYLevelFastInit
                 _names.Add(file.Name);
         }
 
-        internal static bool Settled()
+        // The shared packs a level actually references: its info asset (recipes, include
+        // lists, optional items, ingredients, steps) and its scene bundle both point at
+        // pack CABs through external references. Only these must be resident before setup
+        // and scene loading; the remaining packs keep loading in the background. Falls
+        // back to every pack when the reference scan is unavailable.
+        internal static HashSet<string> NeededPacks(string infoFile, string sceneFile)
         {
-            if (_mode == Mode.Off || _names.Count == 0) return true;
-            if (_mode == Mode.Takeover) return _drained;
-            foreach (string name in _names)
-                if (!IsResident(name)) return false;
-            return true;
+            HashSet<string> packs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (!IndexPackCabinets()) return AllPacks();
+            try
+            {
+                foreach (string cabinet in InfoBundleGraph.BundleReferences(infoFile)) AddPack(cabinet, packs);
+                if (sceneFile != null && File.Exists(sceneFile))
+                    foreach (string cabinet in InfoBundleGraph.BundleReferences(sceneFile)) AddPack(cabinet, packs);
+            }
+            catch (Exception e)
+            {
+                FastInitPlugin.Log.LogWarning("shared pack reference scan unavailable; waiting for every shared pack: " + e.Message);
+                return AllPacks();
+            }
+            // A successful scan that attributes nothing means this level references no
+            // shared pack: waiting cannot resolve it, so the reload/failure path decides.
+            return packs;
         }
 
-        internal static bool WaitingUseful()
+        private static void AddPack(string cabinet, HashSet<string> packs)
         {
-            return _mode != Mode.Off && _names.Count != 0 && !Settled();
+            string pack;
+            if (cabinet != null && _cabPacks.TryGetValue(cabinet, out pack)) packs.Add(pack);
+        }
+
+        private static HashSet<string> AllPacks()
+        {
+            CollectNames();
+            return new HashSet<string>(_names, StringComparer.OrdinalIgnoreCase);
+        }
+
+        // Reads each pack's bundle directory once; a pack whose header cannot be read is
+        // simply never attributed, and NeededPacks falls back to waiting for all packs.
+        private static bool IndexPackCabinets()
+        {
+            if (_cabsIndexed) return _cabPacks.Count != 0;
+            _cabsIndexed = true;
+            CollectNames();
+            if (_loaderDir == null) return false;
+            foreach (string name in _names)
+            {
+                try
+                {
+                    foreach (string cabinet in InfoBundleGraph.CabinetNames(Path.Combine(_loaderDir, name)))
+                        _cabPacks[cabinet] = name;
+                }
+                catch (Exception e)
+                {
+                    FastInitPlugin.Log.LogWarning("shared pack index unavailable [" + name + "]: " + e.Message);
+                }
+            }
+            return _cabPacks.Count != 0;
+        }
+
+        internal static string DescribePacks(HashSet<string> packs)
+        {
+            List<string> names = new List<string>(packs);
+            names.Sort(StringComparer.OrdinalIgnoreCase);
+            return string.Join(", ", names.ToArray());
         }
 
         // A bundle load that makes no progress for this long is treated as stalled so
         // the entry fails with a precise message instead of hanging indefinitely.
         private const float StallSeconds = 20f;
 
-        // Waits until the shared bundles settle, the configured timeout elapses, or the
-        // resident count stops moving (then gives way; the loading coroutine runs
-        // independently of LoadHeavy). progress receives the resident count whenever it
-        // changes so the corner label keeps moving instead of looking frozen.
-        internal static IEnumerator AwaitSettled(Action<int> progress)
+        // Waits until the needed packs settle, the configured timeout elapses, or their
+        // loading progress stops moving. Still-pending needed requests get their priority
+        // raised first, so entering a level pushes exactly its own packs ahead of the
+        // rest. progress receives the settled count and the average progress of the
+        // pending needed requests, keeping the corner label moving instead of looking
+        // frozen.
+        internal static IEnumerator AwaitPacks(HashSet<string> packs, Action<int, float> progress)
         {
-            if (!WaitingUseful()) yield break;
+            if (_mode == Mode.Off || packs == null || packs.Count == 0) yield break;
+            int boosted = Prioritize(packs);
+            if (boosted != 0)
+                FastInitPlugin.Log.LogInfo("prioritized shared packs for entry: " + boosted + " of " + packs.Count
+                    + " still loading (" + DescribePacks(packs) + ")");
             float start = Time.realtimeSinceStartup;
             float nextNotice = start + 5f;
             float timeout = FastInitPlugin.WLoaderGateTimeoutSeconds;
-            int resident = ResidentCount();
+            int settled = SettledCount(packs);
+            float fraction = PendingFraction(packs);
             float lastProgress = start;
-            if (progress != null) progress(resident);
-            while (!Settled())
+            if (progress != null) progress(settled, fraction);
+            while (!Settled(packs))
             {
-                int now = ResidentCount();
-                if (now != resident)
+                int nowSettled = SettledCount(packs);
+                float nowFraction = PendingFraction(packs);
+                // A long decode still reports a rising request progress, so a cold disk
+                // is not mistaken for a stalled load.
+                if (nowSettled != settled || nowFraction > fraction + 0.01f)
                 {
-                    resident = now;
+                    settled = nowSettled;
+                    fraction = nowFraction;
                     lastProgress = Time.realtimeSinceStartup;
-                    if (progress != null) progress(resident);
+                    if (progress != null) progress(settled, fraction);
                 }
                 if (Time.realtimeSinceStartup - start >= timeout)
                 {
-                    FastInitPlugin.Log.LogWarning("shared web bundle wait timed out after " + (int)timeout
-                        + "s (" + resident + "/" + _names.Count + " resident); giving way");
+                    FastInitPlugin.Log.LogWarning("shared pack wait timed out after " + (int)timeout
+                        + "s (" + settled + "/" + packs.Count + " ready at " + Percent(fraction) + "); giving way");
                     yield break;
                 }
                 if (Time.realtimeSinceStartup - lastProgress >= StallSeconds)
                 {
-                    FastInitPlugin.Log.LogWarning("shared web bundles stopped progressing at " + resident + "/"
-                        + _names.Count + " resident for " + (int)StallSeconds + "s; giving way");
+                    FastInitPlugin.Log.LogWarning("shared packs stopped progressing at " + settled + "/"
+                        + packs.Count + " ready (" + Percent(fraction) + ") for " + (int)StallSeconds + "s; giving way");
                     yield break;
                 }
                 if (Time.realtimeSinceStartup >= nextNotice)
                 {
-                    FastInitPlugin.Log.LogInfo("waiting for shared web bundles: " + resident + "/" + _names.Count + " resident");
+                    FastInitPlugin.Log.LogInfo("waiting for shared packs: " + settled + "/" + packs.Count
+                        + " ready (" + Percent(fraction) + " of the rest)");
                     nextNotice += 5f;
                 }
                 yield return null;
             }
-            FastInitPlugin.Log.LogInfo("shared web bundles settled after " + (int)((Time.realtimeSinceStartup - start) * 1000) + " ms");
+            FastInitPlugin.Log.LogInfo("shared packs ready after " + (int)((Time.realtimeSinceStartup - start) * 1000) + " ms");
+        }
+
+        private static string Percent(float fraction)
+        {
+            return (int)(fraction * 100f) + "%";
+        }
+
+        private static int Prioritize(HashSet<string> packs)
+        {
+            int boosted = 0;
+            foreach (string name in packs)
+            {
+                AssetBundleCreateRequest request;
+                if (!_requests.TryGetValue(name, out request) || request.isDone) continue;
+                request.priority = 100;
+                boosted++;
+            }
+            return boosted;
+        }
+
+        // Average progress of the needed packs that are still loading; 0 when none are.
+        private static float PendingFraction(HashSet<string> packs)
+        {
+            if (_mode != Mode.Takeover) return 0f;
+            float sum = 0f;
+            int count = 0;
+            foreach (string name in packs)
+            {
+                AssetBundleCreateRequest request;
+                if (!_requests.TryGetValue(name, out request) || request.isDone) continue;
+                sum += request.progress;
+                count++;
+            }
+            return count == 0 ? 0f : sum / count;
+        }
+
+        private static bool Settled(HashSet<string> packs)
+        {
+            foreach (string name in packs)
+                if (!IsSettled(name)) return false;
+            return true;
+        }
+
+        private static int SettledCount(HashSet<string> packs)
+        {
+            int count = 0;
+            foreach (string name in packs)
+                if (IsSettled(name)) count++;
+            return count;
+        }
+
+        private static bool IsSettled(string name)
+        {
+            if (_mode == Mode.Takeover) return _settled.Contains(name);
+            return IsResident(name);
         }
 
         internal static int ResidentCount()
@@ -300,8 +429,6 @@ namespace DIYLevelFastInit
                 if (IsResident(name)) count++;
             return count;
         }
-
-        internal static int TotalCount() { return _names.Count; }
 
         private static bool IsResident(string name)
         {

@@ -85,6 +85,28 @@ namespace DIYLevelFastInit
             return source;
         }
 
+        // CAB names referenced by every serialized file in a bundle, whichever bundle owns
+        // the target. Shared web packs are referenced this way from info and scene bundles.
+        internal static string[] BundleReferences(string path)
+        {
+            return References(Open(Path.GetFullPath(path)));
+        }
+
+        // CAB names of the serialized files a bundle contains (its .resS/.resource
+        // companions excluded).
+        internal static List<string> CabinetNames(string path)
+        {
+            List<string> names = new List<string>();
+            foreach (Node node in Open(Path.GetFullPath(path)).Nodes)
+            {
+                if (!node.Name.StartsWith("CAB-", StringComparison.OrdinalIgnoreCase)) continue;
+                if (node.Name.EndsWith(".resS", StringComparison.OrdinalIgnoreCase)
+                    || node.Name.EndsWith(".resource", StringComparison.OrdinalIgnoreCase)) continue;
+                names.Add(node.Name);
+            }
+            return names;
+        }
+
         private static Source ReadSource(FileInfo file)
         {
             string path = file.FullName;
