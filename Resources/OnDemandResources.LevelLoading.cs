@@ -295,8 +295,8 @@ namespace DIYLevelFastInit
             // Keep the corner label moving while waiting so the entry never looks frozen.
             yield return WLoaderInterop.AwaitBundles(bundles, (settled, fraction) =>
                 LevelLoadProgress = fraction > 0.01f
-                    ? "shared " + settled + "/" + bundles.Count + " " + (int)(fraction * 100f) + "%"
-                    : "shared " + settled + "/" + bundles.Count);
+                    ? "common asset files " + settled + "/" + bundles.Count + " " + (int)(fraction * 100f) + "%"
+                    : "common asset files " + settled + "/" + bundles.Count);
             if (!current()) yield break;
             for (int attempt = 1; attempt <= 2 && CountUnresolvedReferences(full.Value) > 0; attempt++)
             {
