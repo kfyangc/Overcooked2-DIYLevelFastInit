@@ -89,12 +89,8 @@ namespace DIYLevelFastInit
         {
             foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
             {
-                try
-                {
-                    Type type = assembly.GetType(LoaderTypeName, false);
-                    if (type != null) return type;
-                }
-                catch { }
+                Type match = FindLoaderTypeIn(assembly);
+                if (match != null) return match;
             }
             // The web loader may instantiate after this plugin; load its assembly early
             // so the probe is patched before its first dependency scan runs.
@@ -102,11 +98,25 @@ namespace DIYLevelFastInit
             {
                 try
                 {
-                    Type type = Assembly.LoadFrom(candidate).GetType(LoaderTypeName, false);
-                    if (type != null) return type;
+                    Type match = FindLoaderTypeIn(Assembly.LoadFrom(candidate));
+                    if (match != null) return match;
                 }
                 catch { }
             }
+            return null;
+        }
+
+        // The loader class lives in a namespace that varies across its releases
+        // (e.g. OC2LevelRuntimeLoader.LevelRuntimeLoader); match by simple name so a
+        // namespace change cannot hide it.
+        private static Type FindLoaderTypeIn(Assembly assembly)
+        {
+            try
+            {
+                foreach (Type type in assembly.GetTypes())
+                    if (type.IsClass && type.Name == LoaderTypeName) return type;
+            }
+            catch { }
             return null;
         }
 
