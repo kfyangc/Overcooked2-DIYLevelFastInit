@@ -145,8 +145,7 @@ namespace DIYLevelFastInit
                 Release("web loader dependency pipeline not active");
                 yield break;
             }
-            List<FileInfo> files = new List<FileInfo>(OrderedSharedFiles());
-            List<string> priority = ParsePriorityList();
+            List<FileInfo> files = new List<FileInfo>(SharedFiles());
             int skipped = 0;
             List<FileInfo> pending = new List<FileInfo>();
             List<AssetBundleCreateRequest> requests = new List<AssetBundleCreateRequest>();
@@ -174,7 +173,6 @@ namespace DIYLevelFastInit
                     _settled.Add(file.Name);
                     continue;
                 }
-                request.priority = PriorityRank(file.Name, priority) < priority.Count ? 100 : 0;
                 requests.Add(request);
                 pending.Add(file);
             }
@@ -216,37 +214,13 @@ namespace DIYLevelFastInit
                 + failed + " failed (" + (int)((Time.realtimeSinceStartup - started) * 1000) + " ms)");
         }
 
-        private static IEnumerable<FileInfo> OrderedSharedFiles()
+        // No fixed order: every request is issued in the same frame, so all packs load
+        // concurrently and whichever pack a level needs is already under way.
+        private static IEnumerable<FileInfo> SharedFiles()
         {
             List<FileInfo> files = FastInitHost.SafeGetFiles(new DirectoryInfo(_loaderDir), "commonW*");
-            List<string> priority = ParsePriorityList();
-            files.Sort((a, b) =>
-            {
-                int rankA = PriorityRank(a.Name, priority), rankB = PriorityRank(b.Name, priority);
-                if (rankA != rankB) return rankA - rankB;
-                return string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
-            });
+            files.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
             return files;
-        }
-
-        private static List<string> ParsePriorityList()
-        {
-            List<string> priority = new List<string>();
-            string setting = FastInitPlugin.WLoaderPriorityBundles;
-            if (string.IsNullOrEmpty(setting)) return priority;
-            foreach (string part in setting.Split(','))
-            {
-                string name = part.Trim();
-                if (name.Length != 0) priority.Add(name);
-            }
-            return priority;
-        }
-
-        private static int PriorityRank(string name, List<string> priority)
-        {
-            for (int i = 0; i < priority.Count; i++)
-                if (string.Equals(name, priority[i], StringComparison.OrdinalIgnoreCase)) return i;
-            return priority.Count;
         }
 
         private static void CollectNames()
@@ -271,24 +245,47 @@ namespace DIYLevelFastInit
             return _mode != Mode.Off && _names.Count != 0 && !Settled();
         }
 
-        // Waits until the shared bundles settle or the configured timeout elapses
-        // (then gives way; the loading coroutine runs independently of LoadHeavy).
-        internal static IEnumerator AwaitSettled()
+        // A bundle load that makes no progress for this long is treated as stalled so
+        // the entry fails with a precise message instead of hanging indefinitely.
+        private const float StallSeconds = 20f;
+
+        // Waits until the shared bundles settle, the configured timeout elapses, or the
+        // resident count stops moving (then gives way; the loading coroutine runs
+        // independently of LoadHeavy). progress receives the resident count whenever it
+        // changes so the corner label keeps moving instead of looking frozen.
+        internal static IEnumerator AwaitSettled(Action<int> progress)
         {
             if (!WaitingUseful()) yield break;
             float start = Time.realtimeSinceStartup;
             float nextNotice = start + 5f;
             float timeout = FastInitPlugin.WLoaderGateTimeoutSeconds;
+            int resident = ResidentCount();
+            float lastProgress = start;
+            if (progress != null) progress(resident);
             while (!Settled())
             {
+                int now = ResidentCount();
+                if (now != resident)
+                {
+                    resident = now;
+                    lastProgress = Time.realtimeSinceStartup;
+                    if (progress != null) progress(resident);
+                }
                 if (Time.realtimeSinceStartup - start >= timeout)
                 {
-                    FastInitPlugin.Log.LogWarning("shared web bundle wait timed out after " + (int)timeout + "s; giving way");
+                    FastInitPlugin.Log.LogWarning("shared web bundle wait timed out after " + (int)timeout
+                        + "s (" + resident + "/" + _names.Count + " resident); giving way");
+                    yield break;
+                }
+                if (Time.realtimeSinceStartup - lastProgress >= StallSeconds)
+                {
+                    FastInitPlugin.Log.LogWarning("shared web bundles stopped progressing at " + resident + "/"
+                        + _names.Count + " resident for " + (int)StallSeconds + "s; giving way");
                     yield break;
                 }
                 if (Time.realtimeSinceStartup >= nextNotice)
                 {
-                    FastInitPlugin.Log.LogInfo("waiting for shared web bundles: " + ResidentCount() + "/" + _names.Count + " resident");
+                    FastInitPlugin.Log.LogInfo("waiting for shared web bundles: " + resident + "/" + _names.Count + " resident");
                     nextNotice += 5f;
                 }
                 yield return null;
@@ -296,13 +293,15 @@ namespace DIYLevelFastInit
             FastInitPlugin.Log.LogInfo("shared web bundles settled after " + (int)((Time.realtimeSinceStartup - start) * 1000) + " ms");
         }
 
-        private static int ResidentCount()
+        internal static int ResidentCount()
         {
             int count = 0;
             foreach (string name in _names)
                 if (IsResident(name)) count++;
             return count;
         }
+
+        internal static int TotalCount() { return _names.Count; }
 
         private static bool IsResident(string name)
         {

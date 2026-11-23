@@ -287,7 +287,9 @@ namespace DIYLevelFastInit
             if (unresolved == 0) yield break;
             FastInitPlugin.Log.LogWarning("level references unresolved: " + scene + " (" + detail
                 + "; shared web bundles " + WLoaderInterop.StateDescription() + ")");
-            yield return WLoaderInterop.AwaitSettled();
+            // Keep the corner label moving while waiting so the entry never looks frozen.
+            yield return WLoaderInterop.AwaitSettled(resident =>
+                LevelLoadProgress = "shared " + resident + "/" + WLoaderInterop.TotalCount());
             if (!current()) yield break;
             for (int attempt = 1; attempt <= 2 && CountUnresolvedReferences(full.Value) > 0; attempt++)
             {

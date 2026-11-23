@@ -378,19 +378,25 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 - `WLoaderInterop` takes over the web loader's `commonW*` shared dependency bundles. A Harmony
   prefix on its private `IsBundleLoaded(string)` probe (installed from `Awake`, optionally via
   an early `Assembly.LoadFrom` of `Loader.dll`) reports `commonW<digits>` names as resident, so
-  its serial background queue skips them; `LoadHeavy` then loads the same files with FastInit
-  scheduling (priority list first, default `commonW3` recipe definitions). The probe call only
+  its serial background queue skips them; `LoadHeavy` then loads every file with one
+  `AssetBundle.LoadFromFileAsync` per bundle in the same frame (all packs load concurrently, no
+  fixed order — whichever pack a level needs is already under way). The probe call only
   happens after that loader activated its dependency pipeline, so suppression never strands a
   bundle; if `_depLoadState` reads 0 at takeover time, the prefix is unpatched and the loader
   keeps its own scheduling (observe mode: waits track Unity residency). Member names are the
   contract with web loader 3.10.2/4.0.0; a contract change degrades to observe mode, never to
-  a double load. Level preparation validates the resolved `LevelInfoSO.recipes` array: null
-  entries (cross-bundle recipe refs that deserialized against not-yet-resident shared bundles
-  — the 0.11.1 `SetupConfig` order-dedup NRE) wait for the settle state, then reload the info
-  graph (`Sets` entry dropped, bundles `Unload(false)` and reloaded) up to twice; persisting
-  nulls fail with a precise message. The synchronous `PrepareLevel` path skips null recipes
-  the same way but cannot wait. Failed takeover files leave the wait list: a corrupt
-  dependency is a reinstall case, not a wait case.
+  a double load. Level preparation validates every reference array `SetupConfig` consumes
+  (`recipes`, `recipeListSOs` and their phase recipes, `includeRecipeMatchLists`,
+  `optionalRecipeMatchListItems`, `allIngredients`, `allCookingSteps`, per-player
+  `scriptedRecipes`, horde waves/enemies/recipes): null entries are cross-bundle references
+  that deserialized against not-yet-resident shared bundles and each one crashes setup on its
+  own. Nulls wait for the settle state while updating the corner label
+  (`shared x/y`), then reload the info graph (`Sets` entry dropped, bundles `Unload(false)`
+  and reloaded) up to twice; persisting nulls fail with a message naming the null fields. The
+  wait is bounded twice: the configured timeout (default 45 s) and a 20 s stall detector, so a
+  hung load fails instead of looking frozen. The synchronous `PrepareLevel` path validates the
+  same fields but cannot wait. Failed takeover files leave the wait list: a corrupt dependency
+  is a reinstall case, not a wait case.
 
 ## Selected level assets
 

@@ -22,7 +22,7 @@ namespace DIYLevelFastInit
     {
         public const string PluginGuid = "oc2.diylevel.fastinit";
         public const string PluginName = "DIYLevel 快速载入 / DIYLevel 启动速度优化 / DIYLevel FastInit";
-        public const string PluginVersion = "1.9.7.1";
+        public const string PluginVersion = "1.9.7.2";
 
         internal static ManualLogSource Log;
 
@@ -69,8 +69,7 @@ namespace DIYLevelFastInit
         internal static bool UseDirectCatalogReader = true;
         // Web loader shared dependency takeover (WLoaderInterop).
         internal static bool TakeOverWLoaderBundles = true;
-        internal static float WLoaderGateTimeoutSeconds = 60f;
-        internal static string WLoaderPriorityBundles = "commonW3";
+        internal static float WLoaderGateTimeoutSeconds = 45f;
         private static CatalogMetadataRequest _catalogRead;
         private LevelDirectoryPoller _directoryPoller;
         private LevelDirectorySnapshot _notifiedDirectory;
