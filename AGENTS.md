@@ -51,10 +51,13 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   twice and this plugin never executes). csc takes the metadata name from the output file,
   so the primary output is `OC2DIYLevelFastInit.dll` and a post-build copy publishes it as
   `bin/Release/DIYLevelFastInit.dll` (renamed files keep their metadata name).
-- Back up the installed DLL outside the plugins scan tree before deployment. The game
-  locks the loaded DLL: coordinate shutdown with the user, copy only after it exits,
-  compare source/destination SHA-256 hashes, then tell the user it is ready to restart.
-  A failed copy must never be reported as an installed fix.
+- Deploy the built DLL automatically after a successful Release build (owner-authorized
+  2026-11-23): no per-deploy confirmation is needed. Still never launch the game. Check
+  `Overcooked2.exe` is not running first (it locks the loaded DLL — if running, report and
+  skip instead of forcing), back up the installed DLL outside the plugins scan tree
+  (e.g. `<GameDir>/BepInEx/plugin-backups/`) before overwriting, and compare
+  source/destination SHA-256 hashes after the copy. A failed copy must never be reported
+  as an installed fix.
 - No committed automated test suite. Verify in the game and inspect
   `BepInEx/LogOutput.log` (also
   `BepInEx/plugins/OC2DIYLevel/logs/logs_info_*/BepInExDebugLog.log`). Native Unity messages
