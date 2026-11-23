@@ -4,6 +4,18 @@
 
 [English README](README.md)
 
+## 1.9.8
+
+[发布说明](RELEASE_NOTES.md#198)
+
+修复启动后立刻进入 Web 导出关卡时因共享依赖包未加载完成而弹出“必需的 DIYLevel 资源加载或使用失败”的问题。FastInit 接管 WLoader 的 `commonW*` 共享依赖包加载（编目后并行加载，WLoader 侧跳过），进图只等该关卡 info 与场景实际引用的依赖包，并提升其尚未完成请求的优先级，其余包继续后台加载。角标显示 `common asset files x/y 百分比`，等待受 `Loading.WLoaderSharedBundleWaitTimeoutSeconds`（默认 60 秒）与 20 秒无进展停滞检测约束。`Loading.TakeOverWLoaderSharedBundles=false` 恢复 WLoader 原生调度。不引用共享包的关卡零等待。
+
+## 1.9.7
+
+[发布说明](RELEASE_NOTES.md#197)
+
+启动检查不再阻塞已就绪的关卡集：无需转换的集合优先出现“更多关卡”，其他集合仍在转换时也可进入已发布集合。仅 LZMA 数据触发转换（raw/LZ4 布局保留），右上角角标不再在 checking 与加载状态间闪烁。
+
 ## 1.9.6
 
 [发布说明](RELEASE_NOTES.md#196)

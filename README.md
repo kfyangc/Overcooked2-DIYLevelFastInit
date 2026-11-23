@@ -4,6 +4,18 @@ Startup and memory optimization for the [OC2DIYLevel](https://github.com/gua248/
 
 [中文说明](README_CN.md)
 
+## Version 1.9.8
+
+[Release notes](RELEASE_NOTES.md#198)
+
+Fixes entering a Web-exported level right after startup failing with the "required DIYLevel resource failed" dialog. FastInit takes over the WLoader `commonW*` shared dependency loads (parallel, after cataloguing, with WLoader skipping its own), and entry waits only for the dependency bundles that level's info and scene actually reference, prioritizing their pending requests while other packs keep loading in the background. The corner shows `common asset files x/y z%`, and the wait is bounded by `Loading.WLoaderSharedBundleWaitTimeoutSeconds` (default 60 s) plus a 20 s no-progress stall. `Loading.TakeOverWLoaderSharedBundles=false` restores native WLoader scheduling. Levels that reference no shared pack enter with no wait.
+
+## Version 1.9.7
+
+[Release notes](RELEASE_NOTES.md#197)
+
+Startup checking no longer blocks already-prepared level sets: sets needing no conversion publish first and can be entered while other sets still convert. Only LZMA data still triggers conversion (raw/LZ4 layouts are kept), and the corner label no longer flickers between checking and loading states.
+
 ## Version 1.9.6
 
 [Release notes](RELEASE_NOTES.md#196)

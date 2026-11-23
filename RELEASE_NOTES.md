@@ -1,3 +1,33 @@
+# 1.9.8
+
+## 中文
+
+修复快速进入使用 Web 导出关卡时，共享依赖包尚未加载完成导致的进图失败（弹"必需的 DIYLevel 资源加载或使用失败"）。
+
+- 接管 WLoader 的 `commonW*` 共享依赖包加载：不再等它自己的串行后台队列，FastInit 在启动编目后并行加载全部共享包，WLoader 侧检查直接跳过，不会重复加载；关卡集列表的发布不受影响。
+- 进图只等**该关卡引用的依赖包**：入口时解析关卡 info bundle 与场景 bundle 的跨包引用，映射到具体的 `commonW*` 与 DIYLevel `common01..04`/`common*_textures` 文件，只等尚未就绪的那些；仍未完成的请求会提升优先级，其余包继续后台加载、不阻塞进图。实测 star_6 只需 commonW1/2/3，不再等无关的 commonW4/5/6；不引用共享包的关卡（如 test_level、oc1_story）零等待。
+- DIYLevel 的 `common*` 在发布关卡列表前已加载且整局不卸载，正常不会参与等待；若某次启动加载失败，入口会**自行补发加载**，而不是直接报资源缺失。
+- 等待过程可见且不会卡死：右上角角标显示 `common asset files x/y 百分比`（百分比取自加载请求的真实进度，标签宽度随文字自适应，不再截断）；总超时（默认 60 秒，`WLoaderSharedBundleWaitTimeoutSeconds` 可调）或连续 20 秒进度无变化时放弃等待，转精确失败弹窗。
+- 引用校验覆盖 SetupConfig 消费的全部数组：配方、阶段配方（`recipeListSOs`）、`includeRecipeMatchLists`、可选配方、食材、烹饪步骤、每人数脚本配方、持久战波次/敌人/配方。共享包就绪后重载关卡信息使引用重新解析；只有重载后仍无法解析（共享包缺失或损坏）才报错，错误信息列出未解析字段及数量，如 `includeRecipeMatchLists=8`。
+- WLoader 版本升级后类名带命名空间也能正确接管（按类型简单名查找）；接口契约变化时自动退化为仅观察、由其自行加载，不影响进图。
+- 新增配置（`[Loading]` 段，改后重启生效）：
+  - `TakeOverWLoaderSharedBundles`（默认 `true`）：接管共享包加载；关掉即恢复 WLoader 原生行为。
+  - `WLoaderSharedBundleWaitTimeoutSeconds`（默认 `60`）：进图等待所需依赖包的总超时。
+
+## English
+
+Fixes level entry failing with "required DIYLevel resource failed" when a Web-exported level is entered before the shared web dependency packs finish loading.
+
+- Takes over the WLoader `commonW*` shared dependency loads: instead of waiting for its serial background queue, FastInit loads every shared pack in parallel right after the startup catalogue, and WLoader skips its own loads so nothing is loaded twice. Publication of the level-set list is not delayed.
+- Entry waits only for the dependency bundles **that level references**: the level's info bundle and scene bundle cross-bundle references are mapped to specific `commonW*` and DIYLevel `common01..04`/`common*_textures` files, and only the ones not ready yet are waited for. Still-pending requests get raised priority and other packs keep loading in the background without blocking entry. Here star_6 needs commonW1/2/3 and no longer waits for the unrelated commonW4/5/6; levels that reference no shared pack (test_level, oc1_story) wait for nothing.
+- DIYLevel `common*` bundles are loaded before the level list is published and stay resident for the session, so they normally never participate in the wait; if a startup load failed, entry requests the missing bundle itself instead of failing with a resource error.
+- The wait is visible and bounded: the corner label shows `common asset files x/y percent` (percent from the requests' own progress; the label sizes itself to its text and is no longer clipped). The wait ends on the configured timeout (default 60 s, `WLoaderSharedBundleWaitTimeoutSeconds`) or 20 s without progress, turning into the precise failure dialog instead of a silent freeze.
+- Validation covers every reference array SetupConfig consumes: recipes, phase recipes (`recipeListSOs`), `includeRecipeMatchLists`, optional items, ingredients, cooking steps, per-player scripted recipes, and horde waves/enemies/recipes. Once the bundles are ready the level info is reloaded so the references resolve; a failure is reported only when they still cannot be resolved, and the message lists the unresolved fields and counts, e.g. `includeRecipeMatchLists=8`.
+- The takeover also works when the loader type moves into a namespace (looked up by simple type name); if the loader's contract changes, it degrades to observing the loader's own loads instead of interfering.
+- New settings (`[Loading]`, applied on restart):
+  - `TakeOverWLoaderSharedBundles` (default `true`): take over shared pack loading; disable to restore native WLoader scheduling.
+  - `WLoaderSharedBundleWaitTimeoutSeconds` (default `60`): maximum entry wait for the needed dependency bundles.
+
 # 1.9.7
 
 ## 中文
