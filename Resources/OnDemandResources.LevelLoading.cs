@@ -285,18 +285,18 @@ namespace DIYLevelFastInit
             string detail;
             int unresolved = CountUnresolvedReferences(full.Value, out detail);
             if (unresolved == 0) yield break;
-            // Only the packs this level's info and scene reference must be resident before
-            // setup and scene loading; unrelated shared packs keep loading in the
-            // background instead of blocking entry.
-            HashSet<string> packs = WLoaderInterop.NeededPacks(infoFile, Path.Combine(path, scene));
+            // Only the dependency bundles this level's info and scene reference must be
+            // resident before setup and scene loading; unrelated bundles keep loading in
+            // the background instead of blocking entry.
+            HashSet<string> bundles = WLoaderInterop.NeededBundles(infoFile, Path.Combine(path, scene));
             FastInitPlugin.Log.LogWarning("level references unresolved: " + scene + " (" + detail
                 + "; shared web bundles " + WLoaderInterop.StateDescription() + ")");
-            FastInitPlugin.Log.LogInfo("level shared dependencies: " + scene + " -> " + WLoaderInterop.DescribePacks(packs));
+            FastInitPlugin.Log.LogInfo("level dependency bundles: " + scene + " -> " + WLoaderInterop.DescribeBundles(bundles));
             // Keep the corner label moving while waiting so the entry never looks frozen.
-            yield return WLoaderInterop.AwaitPacks(packs, (settled, fraction) =>
+            yield return WLoaderInterop.AwaitBundles(bundles, (settled, fraction) =>
                 LevelLoadProgress = fraction > 0.01f
-                    ? "shared " + settled + "/" + packs.Count + " " + (int)(fraction * 100f) + "%"
-                    : "shared " + settled + "/" + packs.Count);
+                    ? "shared " + settled + "/" + bundles.Count + " " + (int)(fraction * 100f) + "%"
+                    : "shared " + settled + "/" + bundles.Count);
             if (!current()) yield break;
             for (int attempt = 1; attempt <= 2 && CountUnresolvedReferences(full.Value) > 0; attempt++)
             {

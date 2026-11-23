@@ -392,15 +392,17 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   `optionalRecipeMatchListItems`, `allIngredients`, `allCookingSteps`, per-player
   `scriptedRecipes`, horde waves/enemies/recipes): null entries are cross-bundle references
   that deserialized against not-yet-resident shared bundles and each one crashes setup on its
-  own. On a null, entry waits only for the packs the level actually references: the info
-  bundle's and the scene bundle's external CAB references (`InfoBundleGraph.BundleReferences`)
-  are mapped to pack files through each pack's bundle directory
-  (`InfoBundleGraph.CabinetNames`), and still-pending needed requests get priority 100. The
-  remaining packs keep loading in the background. Waits update the corner label
+  own. On a null, entry waits only for the dependency bundles the level actually
+  references: the info bundle's and the scene bundle's external CAB references
+  (`InfoBundleGraph.BundleReferences`) are mapped to bundle files through each bundle's
+  directory (`InfoBundleGraph.CabinetNames`), covering WLoader `commonW*` and DIYLevel
+  `common*`. Still-pending needed requests get priority 100 and a needed bundle nothing is
+  loading (a failed startup load) is requested on entry, so commons also heal here; the
+  remaining bundles keep loading in the background. Waits update the corner label
   (`shared x/y z%`, percent from the pending requests' own progress) and end on the
   configured timeout (default 60 s) or a 20 s no-progress stall; a scan that cannot run
-  falls back to waiting for every pack, a scan that attributes no pack waits for none.
-  Nulls then reload the info graph (`Sets` entry dropped, bundles `Unload(false)` and
+  falls back to waiting for every shared pack, a scan that attributes no bundle waits for
+  none. Nulls then reload the info graph (`Sets` entry dropped, bundles `Unload(false)` and
   reloaded) up to twice; persisting nulls fail with a message naming the null fields. The
   synchronous `PrepareLevel` path validates the same fields but cannot wait. Failed takeover
   files leave the wait list: a corrupt dependency is a reinstall case, not a wait case.
