@@ -51,10 +51,13 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   twice and this plugin never executes). csc takes the metadata name from the output file,
   so the primary output is `OC2DIYLevelFastInit.dll` and a post-build copy publishes it as
   `bin/Release/DIYLevelFastInit.dll` (renamed files keep their metadata name).
-- Back up the installed DLL outside the plugins scan tree before deployment. The game
-  locks the loaded DLL: coordinate shutdown with the user, copy only after it exits,
-  compare source/destination SHA-256 hashes, then tell the user it is ready to restart.
-  A failed copy must never be reported as an installed fix.
+- Deploy the built DLL automatically after a successful Release build (owner-authorized
+  2026-11-23): no per-deploy confirmation is needed. Still never launch the game. Check
+  `Overcooked2.exe` is not running first (it locks the loaded DLL — if running, report and
+  skip instead of forcing), back up the installed DLL outside the plugins scan tree
+  (e.g. `<GameDir>/BepInEx/plugin-backups/`) before overwriting, and compare
+  source/destination SHA-256 hashes after the copy. A failed copy must never be reported
+  as an installed fix.
 - No committed automated test suite. Verify in the game and inspect
   `BepInEx/LogOutput.log` (also
   `BepInEx/plugins/OC2DIYLevel/logs/logs_info_*/BepInExDebugLog.log`). Native Unity messages
@@ -62,6 +65,10 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 - Useful FastInit log lines:
   - `common bundles: ...`, `level set [...] ready (... metadata only)`,
     `FastInit complete: ...`, `level set menu rebuilt: ...`.
+  - `web loader shared bundle takeover armed/released: ...`, `WLoader shared bundles: ...`,
+    `level references unresolved: ...`, `level shared dependencies: ... -> ...`,
+    `prioritized shared packs for entry: ...`, `shared packs ready after ... ms`,
+    `reloading level info to resolve references: ...`.
   - `catalog cache hit: ...`, `lightweight scene directory: ... no recipe configs`.
   - `on-demand info loaded/released` (resident bundle count),
     `on-demand config ready/released`, `scene runtime objects released`.
@@ -370,6 +377,35 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 - `LevelConfigFactory` binds the installed `SetupConfig` signature. For 0.11.1, initialize the
   standard and Horde template descriptors before setting `commonBundle` and keep the factory
   call-site hooks that track owned allocations and diagnose missing resources.
+- `WLoaderInterop` takes over the web loader's `commonW*` shared dependency bundles. A Harmony
+  prefix on its private `IsBundleLoaded(string)` probe (installed from `Awake`, optionally via
+  an early `Assembly.LoadFrom` of `Loader.dll`) reports `commonW<digits>` names as resident, so
+  its serial background queue skips them; `LoadHeavy` then loads every file with one
+  `AssetBundle.LoadFromFileAsync` per bundle in the same frame (all packs load concurrently, no
+  fixed order — whichever pack a level needs is already under way). The probe call only
+  happens after that loader activated its dependency pipeline, so suppression never strands a
+  bundle; if `_depLoadState` reads 0 at takeover time, the prefix is unpatched and the loader
+  keeps its own scheduling (observe mode: waits track Unity residency). Member names are the
+  contract with web loader 3.10.2/4.0.0; a contract change degrades to observe mode, never to
+  a double load. Level preparation validates every reference array `SetupConfig` consumes
+  (`recipes`, `recipeListSOs` and their phase recipes, `includeRecipeMatchLists`,
+  `optionalRecipeMatchListItems`, `allIngredients`, `allCookingSteps`, per-player
+  `scriptedRecipes`, horde waves/enemies/recipes): null entries are cross-bundle references
+  that deserialized against not-yet-resident shared bundles and each one crashes setup on its
+  own. On a null, entry waits only for the dependency bundles the level actually
+  references: the info bundle's and the scene bundle's external CAB references
+  (`InfoBundleGraph.BundleReferences`) are mapped to bundle files through each bundle's
+  directory (`InfoBundleGraph.CabinetNames`), covering WLoader `commonW*` and DIYLevel
+  `common*`. Still-pending needed requests get priority 100 and a needed bundle nothing is
+  loading (a failed startup load) is requested on entry, so commons also heal here; the
+  remaining bundles keep loading in the background. Waits update the corner label
+  (`shared x/y z%`, percent from the pending requests' own progress) and end on the
+  configured timeout (default 60 s) or a 20 s no-progress stall; a scan that cannot run
+  falls back to waiting for every shared pack, a scan that attributes no bundle waits for
+  none. Nulls then reload the info graph (`Sets` entry dropped, bundles `Unload(false)` and
+  reloaded) up to twice; persisting nulls fail with a message naming the null fields. The
+  synchronous `PrepareLevel` path validates the same fields but cannot wait. Failed takeover
+  files leave the wait list: a corrupt dependency is a reinstall case, not a wait case.
 
 ## Selected level assets
 

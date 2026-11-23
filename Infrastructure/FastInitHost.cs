@@ -199,6 +199,12 @@ namespace DIYLevelFastInit
                 commonMs = phase.Elapsed.TotalMilliseconds;
                 FastInitPlugin.Log.LogInfo("common bundles: " + loaded + " loaded, " + skipped + " skipped (dup), " + failed + " failed");
 
+                // The web loader's shared commonW* bundles carry cross-bundle recipe
+                // references. Load them on a parallel coroutine (concurrent requests) so
+                // catalog publication is never blocked on them; level preparation gates
+                // on their settle state instead (WLoaderInterop).
+                StartCoroutine(Guard(WLoaderInterop.LoadSharedBundles(), "WLoader shared bundle takeover"));
+
                 phase.Reset();
                 phase.Start();
                 System.Diagnostics.Stopwatch slice = System.Diagnostics.Stopwatch.StartNew();

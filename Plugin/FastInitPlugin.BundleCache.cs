@@ -23,6 +23,10 @@ namespace DIYLevelFastInit
                 InfoBundleOptimizationBatch.MemoryBudgetBytes = Math.Max(16, Math.Min(2048, Config.Bind("Loading", "ConversionMemoryBudgetMiB", 800,
                     "Estimated conversion memory budget (16-2048 MiB). File size, decoder dictionaries and bounded HC buffers determine reservations. Queueing waits for released reservations; CPU workers remain capped at the logical processor count. This is not a process memory limit. Restart after changing this option.").Value)) * 1024L * 1024;
                 Log.LogInfo("level bundles use source files directly; runtime LZ4 cache is disabled (legacy cache options are ignored)");
+                TakeOverWLoaderBundles = Config.Bind("Loading", "TakeOverWLoaderSharedBundles", true,
+                    "Load the web loader's commonW* shared dependency bundles with FastInit scheduling instead of its serial background queue, so entering a web-exported level right after startup cannot race them. Restart after changing this option.").Value;
+                WLoaderGateTimeoutSeconds = Config.Bind("Loading", "WLoaderSharedBundleWaitTimeoutSeconds", 60,
+                    "Maximum seconds level preparation waits for the shared web dependency bundles before giving way. The wait also ends early when the resident count stops advancing for 20 seconds. Restart after changing this option.").Value;
             }
             catch (Exception e) { Log.LogWarning("level bundle startup options unavailable; defaults retained: " + e.Message); }
         }

@@ -22,7 +22,7 @@ namespace DIYLevelFastInit
     {
         public const string PluginGuid = "oc2.diylevel.fastinit";
         public const string PluginName = "DIYLevel 快速载入 / DIYLevel 启动速度优化 / DIYLevel FastInit";
-        public const string PluginVersion = "1.9.7";
+        public const string PluginVersion = "1.9.8";
 
         internal static ManualLogSource Log;
 
@@ -67,6 +67,9 @@ namespace DIYLevelFastInit
         internal static int InfoOptimizationDone;
         internal static int InfoOptimizationTotal;
         internal static bool UseDirectCatalogReader = true;
+        // Web loader shared dependency takeover (WLoaderInterop).
+        internal static bool TakeOverWLoaderBundles = true;
+        internal static float WLoaderGateTimeoutSeconds = 60f;
         private static CatalogMetadataRequest _catalogRead;
         private LevelDirectoryPoller _directoryPoller;
         private LevelDirectorySnapshot _notifiedDirectory;
@@ -116,6 +119,7 @@ namespace DIYLevelFastInit
                 Log.LogInfo("dirty stack destruction and sink count events ready: host count preserved; original serializers unchanged.");
                 _patchesReady = true;
                 ConfigureBundleCache();
+                WLoaderInterop.TryInstall();
                 _blockerConflict = PluginConflictDialog.DetectStandaloneBlocker();
                 if (_blockerConflict == null)
                     _resourceFailureBlocker = ResourceFailures.ResourceFailureBlocker.Create();
@@ -124,6 +128,8 @@ namespace DIYLevelFastInit
             catch (Exception e)
             {
                 harmony.UnpatchSelf();
+                // Without the loading pipeline nobody loads the suppressed bundles.
+                WLoaderInterop.Release("FastInit hooks could not be installed");
                 Log.LogError("FastInit hooks could not be installed; original DIY loader retained: " + e);
             }
         }
