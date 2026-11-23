@@ -45,10 +45,16 @@ namespace DIYLevelFastInit
                     : catalogLoading ? (Syncing ? "DIY levels refreshing" : "DIY levels loading " + done + "/" + TotalSets)
                     : "DIY previews caching " + OnDemandResources.ThumbnailDone + "/" + OnDemandResources.ThumbnailTotal;
                 Rect rect = new Rect(Screen.width - 336, 6, 330, 26);
+                // The label used to assume 330px was enough; longer states (entry dependency
+                // progress) were clipped. Size the rect to the text instead, so no wording
+                // change can truncate it again; the screen width remains the hard bound.
+                GUIContent content = new GUIContent(text);
+                float width = Math.Min(Screen.width - 16f, _progressStyle.CalcSize(content).x + 12f);
+                if (width > rect.width) rect = new Rect(Screen.width - width - 6f, rect.y, width, rect.height);
                 _progressStyle.normal.textColor = Color.black;
-                GUI.Label(new Rect(rect.x + 2f, rect.y + 2f, rect.width, rect.height), text, _progressStyle);
+                GUI.Label(new Rect(rect.x + 2f, rect.y + 2f, rect.width, rect.height), content, _progressStyle);
                 _progressStyle.normal.textColor = Color.white;
-                GUI.Label(rect, text, _progressStyle);
+                GUI.Label(rect, content, _progressStyle);
             }
             catch (Exception)
             {
