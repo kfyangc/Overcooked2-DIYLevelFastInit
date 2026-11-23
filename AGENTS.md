@@ -62,6 +62,8 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 - Useful FastInit log lines:
   - `common bundles: ...`, `level set [...] ready (... metadata only)`,
     `FastInit complete: ...`, `level set menu rebuilt: ...`.
+  - `web loader shared bundle takeover armed/released: ...`, `WLoader shared bundles: ...`,
+    `level recipe references unresolved: ...`, `reloading level info to resolve recipe references: ...`.
   - `catalog cache hit: ...`, `lightweight scene directory: ... no recipe configs`.
   - `on-demand info loaded/released` (resident bundle count),
     `on-demand config ready/released`, `scene runtime objects released`.
@@ -370,6 +372,22 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 - `LevelConfigFactory` binds the installed `SetupConfig` signature. For 0.11.1, initialize the
   standard and Horde template descriptors before setting `commonBundle` and keep the factory
   call-site hooks that track owned allocations and diagnose missing resources.
+- `WLoaderInterop` takes over the web loader's `commonW*` shared dependency bundles. A Harmony
+  prefix on its private `IsBundleLoaded(string)` probe (installed from `Awake`, optionally via
+  an early `Assembly.LoadFrom` of `Loader.dll`) reports `commonW<digits>` names as resident, so
+  its serial background queue skips them; `LoadHeavy` then loads the same files with FastInit
+  scheduling (priority list first, default `commonW3` recipe definitions). The probe call only
+  happens after that loader activated its dependency pipeline, so suppression never strands a
+  bundle; if `_depLoadState` reads 0 at takeover time, the prefix is unpatched and the loader
+  keeps its own scheduling (observe mode: waits track Unity residency). Member names are the
+  contract with web loader 3.10.2/4.0.0; a contract change degrades to observe mode, never to
+  a double load. Level preparation validates the resolved `LevelInfoSO.recipes` array: null
+  entries (cross-bundle recipe refs that deserialized against not-yet-resident shared bundles
+  — the 0.11.1 `SetupConfig` order-dedup NRE) wait for the settle state, then reload the info
+  graph (`Sets` entry dropped, bundles `Unload(false)` and reloaded) up to twice; persisting
+  nulls fail with a precise message. The synchronous `PrepareLevel` path skips null recipes
+  the same way but cannot wait. Failed takeover files leave the wait list: a corrupt
+  dependency is a reinstall case, not a wait case.
 
 ## Selected level assets
 

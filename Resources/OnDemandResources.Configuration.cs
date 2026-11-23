@@ -53,10 +53,31 @@ namespace DIYLevelFastInit
             ReleaseUnused();
             LoadSet(path, scene);
             LevelInfoSO full = Resolve(path, scene);
+            // Synchronous entry path (client replay/direct callers): no wait window
+            // here, so unresolved recipe references fail precisely before SetupConfig.
+            int unresolved = CountNullRecipes(full);
+            if (unresolved > 0)
+                throw new IOException("unresolved recipe references: " + scene + " (" + unresolved
+                    + " null refs; shared web bundles " + WLoaderInterop.StateDescription() + ")");
             SceneDirectoryData.SceneDirectoryEntry entry = PrepareSessionEntry(scene);
             entry.LoadScreenOverride = full.screenshot;
             foreach (SceneDirectoryData.PerPlayerCountDirectoryEntry variant in entry.SceneVarients) PrepareVariant(full, variant);
             FastInitPlugin.Log.LogInfo("on-demand config ready: " + scene + " (" + Levels.Count + " levels retained)");
+        }
+
+        // Counts recipe references that deserialized as null because their target
+        // bundle was not resident when the info asset loaded. SetupConfig consumes
+        // exactly these entries, so any null here becomes its order-dedup NRE.
+        internal static int CountNullRecipes(LevelInfoSO level)
+        {
+            if (level == null) return 0;
+            ScriptableObject[] recipes = level.recipes;
+            if (recipes == null || recipes.Length == 0) return 0;
+            int count = level.debugRecipeCount == 0 ? recipes.Length : Math.Min(level.debugRecipeCount, recipes.Length);
+            int unresolved = 0;
+            for (int i = 0; i < count; i++)
+                if (recipes[i] == null) unresolved++;
+            return unresolved;
         }
 
         private static SceneDirectoryData.SceneDirectoryEntry PrepareSessionEntry(string scene)

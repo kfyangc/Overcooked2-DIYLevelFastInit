@@ -242,6 +242,14 @@ namespace DIYLevelFastInit
                 FastInitPlugin.Log.LogInfo(context + "level info asset ready: " + scene + " (" + assetTimer.ElapsedMilliseconds + " ms elapsed)");
             }
             finally { info.Value = null; }
+            // Cross-bundle recipe references deserialize as null while the shared web
+            // dependency bundles are still loading; resolve them before config factories.
+            Box<LevelInfoSO> level = new Box<LevelInfoSO>();
+            level.Value = full;
+            yield return EnsureResolvedRecipes(path, scene, requiredBundles, current, level);
+            if (!current()) yield break;
+            full = level.Value;
+            if (full == null) throw new IOException("Missing selected LevelInfo after recipe resolution: " + scene);
             Sets[path].SceneDependencies[scene] = requiredBundles;
             FastInitPlugin.Log.LogInfo("async " + context + "level resources ready: " + scene + " (" + timer.ElapsedMilliseconds + " ms elapsed)");
             LevelLoadProgress = context + "0/4";
@@ -261,6 +269,60 @@ namespace DIYLevelFastInit
             if (!current()) yield break;
             FastInitPlugin.Log.LogInfo("on-demand config ready: " + scene + " (" + Levels.Count + " levels retained, async "
                 + context + "level entry, " + timer.ElapsedMilliseconds + " ms elapsed)");
+        }
+
+        // Waits for the shared web dependency bundles, then reloads the info graph so
+        // null recipe references deserialize again against the now-resident targets.
+        // Two reload attempts cover a settle that completes mid-wait; a persisting null
+        // is a broken dependency and fails with a precise message instead of the
+        // SetupConfig NullReferenceException on order deduplication.
+        private static IEnumerator EnsureResolvedRecipes(string path, string scene, HashSet<string> requiredBundles,
+            Func<bool> current, Box<LevelInfoSO> full)
+        {
+            int unresolved = CountNullRecipes(full.Value);
+            if (unresolved == 0) yield break;
+            FastInitPlugin.Log.LogWarning("level recipe references unresolved: " + scene + " (" + unresolved
+                + " null; shared web bundles " + WLoaderInterop.StateDescription() + ")");
+            yield return WLoaderInterop.AwaitSettled();
+            if (!current()) yield break;
+            for (int attempt = 1; attempt <= 2 && CountNullRecipes(full.Value) > 0; attempt++)
+            {
+                FastInitPlugin.Log.LogInfo("reloading level info to resolve recipe references: " + scene + " (attempt " + attempt + ")");
+                yield return ReloadLevelInfo(path, scene, requiredBundles, current);
+                if (!current()) yield break;
+                LoadedSet set;
+                full.Value = Sets.TryGetValue(path, out set) && set.LoadedLevels.ContainsKey(scene) ? set.LoadedLevels[scene] : null;
+            }
+            unresolved = CountNullRecipes(full.Value);
+            if (unresolved > 0)
+                throw new IOException("unresolved recipe references: " + scene + " (" + unresolved
+                    + " null refs; shared web bundles " + WLoaderInterop.StateDescription()
+                    + ", reinstall the web dependency pack if this repeats)");
+        }
+
+        // Drops the cached set and closes its bundles, then repeats the async container
+        // and LevelInfo requests; a fresh bundle load re-resolves external references.
+        private static IEnumerator ReloadLevelInfo(string path, string scene, HashSet<string> requiredBundles, Func<bool> current)
+        {
+            Sets.Remove(path);
+            foreach (string required in new List<string>(requiredBundles))
+            {
+                // Someone else's in-flight request keeps its own container.
+                if (PendingBundles.ContainsKey(required)) continue;
+                AssetBundle bundle;
+                if (!InfoBundles.TryGetValue(required, out bundle)) continue;
+                InfoBundles.Remove(required);
+                try { bundle.Unload(false); }
+                catch (Exception e) { FastInitPlugin.Log.LogWarning("unloading " + Path.GetFileName(required) + ": " + e.Message); }
+                ReleaseInfoBundleLease(required);
+            }
+            foreach (string required in requiredBundles)
+            {
+                yield return EnsureInfoBundleAsync(required, 10);
+                if (!current()) yield break;
+            }
+            Box<LevelInfoSO> info = new Box<LevelInfoSO>();
+            yield return EnsureLevelInfoAsync(path, scene, info, 10, current);
         }
 
         private static void BoostEntryPriority(string scene)
