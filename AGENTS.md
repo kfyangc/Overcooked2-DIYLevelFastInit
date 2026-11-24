@@ -392,8 +392,13 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   `optionalRecipeMatchListItems`, `allIngredients`, `allCookingSteps`, per-player
   `scriptedRecipes`, horde waves/enemies/recipes): null entries are cross-bundle references
   that deserialized against not-yet-resident shared bundles and each one crashes setup on its
-  own. On a null, entry waits only for the dependency bundles the level actually
-  references: the info bundle's and the scene bundle's external CAB references
+  own. The dynamic/scripted/horde members (`levelType`, `recipeListSOs`, `scriptedRecipes`,
+  `hordeLevelConfig` and the horde types) exist only in 0.11.1's LevelEditorStub; resolve them
+  by reflection (`ReadMember`/`ReadItems`) so the assembly still loads with 0.10/0.11, whose
+  stub has only the campaign schema. Never reference those members directly — the released
+  1.9.8 did and failed to load on those two versions. On a null, entry waits only for the
+  dependency bundles the level actually references: the info bundle's and the scene bundle's
+  external CAB references
   (`InfoBundleGraph.BundleReferences`) are mapped to bundle files through each bundle's
   directory (`InfoBundleGraph.CabinetNames`), covering WLoader `commonW*` and DIYLevel
   `common*`. Still-pending needed requests get priority 100 and a needed bundle nothing is
@@ -625,7 +630,8 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 ## Publishing rule
 
 Test builds append an incrementing fourth component to the latest approved release
-version. The approved release is `1.9.7`, so subsequent tests use `1.9.7.x`.
+version. The approved release is `1.9.8`, so subsequent tests use `1.9.8.x` (the
+in-progress `1.9.9` cycle uses `1.9.9.x`).
 Changing the three-component release version requires the user's explicit approval.
 Keep historical test commits under their original test versions.
 `RELEASE_NOTES.md` lists approved releases only: fold each release's test-build
