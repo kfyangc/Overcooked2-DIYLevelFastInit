@@ -4,6 +4,12 @@ Startup and memory optimization for the [OC2DIYLevel](https://github.com/gua248/
 
 [中文说明](README_CN.md)
 
+## Version 1.9.9
+
+[Release notes](RELEASE_NOTES.md#199)
+
+Fixes 1.9.8 not working with OC2DIYLevel 0.10.0 and 0.11.0: the entry reference check no longer reads the dynamic, scripted and horde level fields that only 0.11.1 has, but resolves them by name through reflection and skips them on 0.10/0.11. One DLL serves 0.10.0, 0.11.0 and 0.11.1.
+
 ## Version 1.9.8
 
 [Release notes](RELEASE_NOTES.md#198)

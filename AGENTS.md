@@ -630,8 +630,7 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 ## Publishing rule
 
 Test builds append an incrementing fourth component to the latest approved release
-version. The approved release is `1.9.8`, so subsequent tests use `1.9.8.x` (the
-in-progress `1.9.9` cycle uses `1.9.9.x`).
+version. The approved release is `1.9.9`, so subsequent tests use `1.9.9.x`.
 Changing the three-component release version requires the user's explicit approval.
 Keep historical test commits under their original test versions.
 `RELEASE_NOTES.md` lists approved releases only: fold each release's test-build
