@@ -1,3 +1,21 @@
+# 1.9.9
+
+## 中文
+
+修复 1.9.8 无法与 OC2DIYLevel 0.10.0、0.11.0 搭配使用的问题（0.11.1 不受影响）。
+
+- 原因：1.9.8 的进图引用校验直接读取了只有 0.11.1 才有的关卡结构——动态关卡的 `recipeListSOs`、脚本关卡的 `scriptedRecipes`、持久战关卡的 `hordeLevelConfig`/`hordeWaveDataSOs` 及相关类型。0.10、0.11 的 `LevelEditorStub` 没有这些成员，插件在这些版本上进入关卡时校验失败。
+- 这些成员改为按名称反射读取：0.11.1 上照旧校验阶段配方、脚本配方和持久战波次/敌人/配方；0.10、0.11 上自动跳过不存在的结构，其余引用校验（配方、`includeRecipeMatchLists`、可选配方、食材、烹饪步骤）不受影响。
+- 同一个 DLL 同时支持 0.10.0、0.11.0、0.11.1，无需按版本更换。
+
+## English
+
+Fixes 1.9.8 being unusable with OC2DIYLevel 0.10.0 and 0.11.0 (0.11.1 was unaffected).
+
+- Cause: the 1.9.8 entry reference check read fields that only exist in 0.11.1 — `recipeListSOs` for dynamic levels, `scriptedRecipes` for scripted ones, and `hordeLevelConfig`/`hordeWaveDataSOs` plus their types for horde levels. The 0.10 and 0.11 `LevelEditorStub` has no such members, so the check failed when entering a level there.
+- Those members are now read by name through reflection: on 0.11.1 the phase recipe lists, scripted recipes and horde waves/enemies/recipes are still validated; on 0.10 and 0.11 the absent structures are skipped and the remaining checks (recipes, `includeRecipeMatchLists`, optional items, ingredients, cooking steps) are unchanged.
+- One DLL now serves 0.10.0, 0.11.0 and 0.11.1 without swapping files.
+
 # 1.9.8
 
 ## 中文

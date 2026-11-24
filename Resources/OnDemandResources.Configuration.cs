@@ -84,30 +84,33 @@ namespace DIYLevelFastInit
             if (level == null) return 0;
             Dictionary<string, int> parts = new Dictionary<string, int>();
             Accumulate(parts, "recipes", CountNull(level.recipes, RecipeLimit(level)));
-            Accumulate(parts, "recipeListSOs", CountNull(level.recipeListSOs, -1));
-            RecipeListSO[] lists = level.recipeListSOs;
-            if (lists != null)
-                for (int i = 0; i < lists.Length; i++)
-                    if (lists[i] != null) Accumulate(parts, "phaseRecipes", CountNull(lists[i].recipes, -1));
             Accumulate(parts, "includeRecipeMatchLists", CountNull(level.includeRecipeMatchLists, -1));
             Accumulate(parts, "optionalRecipeMatchListItems", CountNull(level.optionalRecipeMatchListItems, -1));
             Accumulate(parts, "allIngredients", CountNull(level.allIngredients, -1));
             Accumulate(parts, "allCookingSteps", CountNull(level.allCookingSteps, -1));
-            bool horde = level.levelType == LevelInfoSO.LevelType.Horde;
+            // Dynamic levels: one recipe list per phase.
+            object[] lists = ReadItems(level, "recipeListSOs");
+            Accumulate(parts, "recipeListSOs", CountNull(lists, -1));
+            if (lists != null)
+                foreach (object list in lists)
+                    Accumulate(parts, "phaseRecipes", CountNull(ReadItems(list, "recipes"), -1));
+            bool horde = IsHorde(level);
             LevelConfigSetupPerPlayerCountSO[] variants = { level.config_1p, level.config_2p, level.config_3p, level.config_4p };
             foreach (LevelConfigSetupPerPlayerCountSO variant in variants)
             {
                 if (variant == null) { Accumulate(parts, "playerConfigs", 1); continue; }
-                Accumulate(parts, "scriptedRecipes", CountNull(variant.scriptedRecipes, -1));
+                // Scripted campaign levels: manual orders instead of the round recipe list.
+                Accumulate(parts, "scriptedRecipes", CountNull(ReadItems(variant, "scriptedRecipes"), -1));
                 if (!horde) continue;
-                HordeLevelConfigSO hordeConfig = variant.hordeLevelConfig;
-                if (hordeConfig == null || hordeConfig.hordeWaveDataSOs == null) continue;
-                foreach (HordeWaveDataSO wave in hordeConfig.hordeWaveDataSOs)
+                object[] waves = ReadItems(ReadMember(variant, "hordeLevelConfig"), "hordeWaveDataSOs");
+                if (waves == null) continue;
+                foreach (object wave in waves)
                 {
-                    if (wave == null) { Accumulate(parts, "hordeWaves", 1); continue; }
-                    Accumulate(parts, "hordeEnemies", CountNull(wave.enemies, -1));
-                    if (wave.recipeListSO == null) { Accumulate(parts, "hordeWaves", 1); continue; }
-                    Accumulate(parts, "hordeRecipes", CountNull(wave.recipeListSO.recipes, -1));
+                    if (Missing(wave)) { Accumulate(parts, "hordeWaves", 1); continue; }
+                    Accumulate(parts, "hordeEnemies", CountNull(ReadItems(wave, "enemies"), -1));
+                    object list = ReadMember(wave, "recipeListSO");
+                    if (Missing(list)) { Accumulate(parts, "hordeWaves", 1); continue; }
+                    Accumulate(parts, "hordeRecipes", CountNull(ReadItems(list, "recipes"), -1));
                 }
             }
             int unresolved = 0;
@@ -131,14 +134,45 @@ namespace DIYLevelFastInit
             return level.debugRecipeCount == 0 ? recipes.Length : Math.Min(level.debugRecipeCount, recipes.Length);
         }
 
-        private static int CountNull(ScriptableObject[] items, int limit)
+        private static int CountNull(object[] items, int limit)
         {
             if (items == null) return 0;
             if (limit < 0 || limit > items.Length) limit = items.Length;
             int unresolved = 0;
             for (int i = 0; i < limit; i++)
-                if (items[i] == null) unresolved++;
+                if (Missing(items[i])) unresolved++;
             return unresolved;
+        }
+
+        // Dynamic, scripted-campaign and horde members exist only in OC2DIYLevel 0.11.1's
+        // LevelEditorStub; 0.10 and 0.11 have no such fields (and no such level types).
+        // Resolving them by name keeps this assembly loadable with all three versions.
+        private static bool IsHorde(LevelInfoSO level)
+        {
+            object type = ReadMember(level, "levelType");
+            return type != null && string.Equals(type.ToString(), "Horde", StringComparison.Ordinal);
+        }
+
+        private static object ReadMember(object owner, string name)
+        {
+            if (owner == null) return null;
+            for (Type type = owner.GetType(); type != null; type = type.BaseType)
+            {
+                FieldInfo field = type.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                if (field != null) return field.GetValue(owner);
+            }
+            return null;
+        }
+
+        private static object[] ReadItems(object owner, string name)
+        {
+            return ReadMember(owner, name) as object[];
+        }
+
+        private static bool Missing(object item)
+        {
+            UnityEngine.Object value = item as UnityEngine.Object;
+            return value == null;
         }
 
         private static void Accumulate(Dictionary<string, int> parts, string name, int count)
