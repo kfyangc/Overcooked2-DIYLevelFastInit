@@ -22,7 +22,7 @@ namespace DIYLevelFastInit
     {
         public const string PluginGuid = "oc2.diylevel.fastinit";
         public const string PluginName = "DIYLevel 快速载入 / DIYLevel 启动速度优化 / DIYLevel FastInit";
-        public const string PluginVersion = "1.9.9";
+        public const string PluginVersion = "1.9.10";
 
         internal static ManualLogSource Log;
 
@@ -114,6 +114,7 @@ namespace DIYLevelFastInit
                 harmony.Patch(AccessTools.Method(typeof(DIYLevelAssetBundleManager), "SetupSceneDirectoryData"),
                     prefix: new HarmonyMethod(typeof(FastInitPlugin), nameof(SetupDirectoryPrefix)));
                 OnDemandResources.Install(harmony);
+                DuplicateCommonDialog.Install(harmony);
                 DirtyPlateStackDestroyFix.Install(harmony);
                 WashingStationCountEvents.Install(harmony);
                 Log.LogInfo("dirty stack destruction and sink count events ready: host count preserved; original serializers unchanged.");
@@ -158,6 +159,7 @@ namespace DIYLevelFastInit
             ClientLoadGate.Cancel("plugin shutdown");
             OnDemandResources.CancelServerPreparation("plugin shutdown");
             OnDemandResources.RestoreEntryPriority("plugin shutdown");
+            DuplicateCommonDialog.ResetForShutdown();
             BundleFileCache.Shutdown();
         }
     }

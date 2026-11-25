@@ -74,7 +74,15 @@ namespace DIYLevelFastInit
                 Log.LogWarning("missing file: " + commonPath);
                 return false;
             }
+            if (DuplicateCommonDialog.IsResident("common"))
+            {
+                DuplicateCommonDialog.RecordDuplicate("common", commonPath);
+            }
             AssetBundle commonBundle = AssetBundle.LoadFromFile(commonPath);
+            if (commonBundle != null)
+            {
+                DuplicateCommonDialog.RecordLoaded("common", commonPath);
+            }
             FiCover.SetValue(null, commonBundle.LoadAsset<Sprite>("diylevelcover"));
             FiSessionPrefab.SetValue(null, commonBundle.LoadAsset<GameObject>("DIYLevelGameSession"));
             LevelConfigFactory.InitializeTemplates(commonBundle);

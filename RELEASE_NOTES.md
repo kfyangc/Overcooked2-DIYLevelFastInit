@@ -1,3 +1,13 @@
+# 1.9.10
+
+## 中文
+
+检测到任意 `common*` 资源包（含 `common`、`common01..04`、`commonW*`）重复加载时弹出游戏原生警告框，列出重复文件名与所在目录，并在 BepInEx 日志记录完整路径，便于清理旧版或多余文件。
+
+## English
+
+Shows a native warning dialog when any `common*` asset bundle (including `common`, `common01..04`, `commonW*`) is loaded twice, listing the duplicate filenames and folders and logging the full paths to BepInEx so old or redundant files can be removed.
+
 # 1.9.9
 
 ## 中文

@@ -170,6 +170,7 @@ namespace DIYLevelFastInit
                 {
                     skipped++;
                     _settled.Add(file.Name);
+                    DuplicateCommonDialog.RecordDuplicate(file.Name, file.FullName);
                     FastInitPlugin.Log.LogInfo("skip " + file.Name + ": already loaded by another plugin");
                     continue;
                 }
@@ -216,7 +217,11 @@ namespace DIYLevelFastInit
                     try { bundle = AssetBundle.LoadFromFile(pending[i].FullName); }
                     catch (Exception e) { FastInitPlugin.Log.LogWarning("WLoader shared bundle sync retry failed [" + pending[i].Name + "]: " + e.Message); }
                 }
-                if (bundle != null) loaded++;
+                if (bundle != null)
+                {
+                    loaded++;
+                    DuplicateCommonDialog.RecordLoaded(pending[i].Name, pending[i].FullName);
+                }
                 else failed++;
                 // Failed files leave the wait list too: a corrupt dependency cannot be
                 // fixed by waiting, and the recipe validation reports it precisely.

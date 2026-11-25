@@ -168,7 +168,7 @@ namespace DIYLevelFastInit
                 int loaded = 0, skipped = 0, failed = 0;
                 foreach (FileInfo file in SafeGetFiles(new DirectoryInfo(pluginDir), "common*"))
                 {
-                    if (file.Name == "common")
+                    if (string.Equals(file.Name, "common", StringComparison.OrdinalIgnoreCase))
                     {
                         continue;
                     }
@@ -179,6 +179,7 @@ namespace DIYLevelFastInit
                     if (resident)
                     {
                         skipped++;
+                        DuplicateCommonDialog.RecordDuplicate(file.Name, file.FullName);
                         FastInitPlugin.Log.LogInfo("skip " + file.Name + ": already loaded by another plugin");
                         continue;
                     }
@@ -188,6 +189,7 @@ namespace DIYLevelFastInit
                     if (done.Value != null)
                     {
                         loaded++;
+                        DuplicateCommonDialog.RecordLoaded(file.Name, file.FullName);
                     }
                     else
                     {

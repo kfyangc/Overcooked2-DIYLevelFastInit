@@ -171,6 +171,7 @@ namespace DIYLevelFastInit
             }
             if (_blockerConflict != null) _blockerConflict.Tick();
             if (_resourceFailureBlocker != null) _resourceFailureBlocker.Tick();
+            DuplicateCommonDialog.Tick(_blockerConflict != null && _blockerConflict.IsActive);
             InfoBundleOptimizationBatch batch = _infoOptimization;
             if (!_patchesReady || batch == null) return;
             UpdateInfoOptimization(batch);

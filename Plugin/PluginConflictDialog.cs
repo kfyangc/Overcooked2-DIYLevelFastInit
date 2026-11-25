@@ -17,6 +17,14 @@ namespace DIYLevelFastInit
         private T17DialogBox _dialog;
         private bool _shown, _errorLogged;
 
+        internal bool IsActive
+        {
+            get
+            {
+                return _dialog != null && _dialog.gameObject != null && _dialog.gameObject.activeInHierarchy;
+            }
+        }
+
         private PluginConflictDialog(string path, string titleCn, string titleEn, string messageCn, string messageEn)
         {
             _path = path;

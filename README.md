@@ -4,6 +4,12 @@ Startup and memory optimization for the [OC2DIYLevel](https://github.com/gua248/
 
 [中文说明](README_CN.md)
 
+## Version 1.9.10
+
+[Release notes](RELEASE_NOTES.md#1910)
+
+Shows a native warning dialog when any `common*` asset bundle (including `common`, `common01..04`, `commonW*`) is loaded twice, listing duplicate filenames/folders and logging full paths to BepInEx.
+
 ## Version 1.9.9
 
 [Release notes](RELEASE_NOTES.md#199)
