@@ -21,13 +21,18 @@ namespace DIYLevelFastInit
             internal UnityFsRepacker.WorkPlan Plan;
         }
 
+        private struct LogEntry
+        {
+            internal string Message;
+            internal bool Debug;
+        }
         internal static long MemoryBudgetBytes = 800L * 1024 * 1024;
         private readonly string[] _paths;
         private readonly bool _restore;
         private readonly long _memoryBudget;
         private readonly int _workerCount;
         private readonly object _sync = new object();
-        private readonly Queue<string> _logs = new Queue<string>();
+        private readonly Queue<LogEntry> _logs = new Queue<LogEntry>();
         private readonly List<PreparedFile> _prepared = new List<PreparedFile>();
         private readonly List<string> _activePaths = new List<string>();
         private readonly List<FileWork> _files = new List<FileWork>();
@@ -119,7 +124,7 @@ namespace DIYLevelFastInit
                     {
                         UnityFsRepacker.WorkPlan plan = UnityFsRepacker.Plan(path, _memoryBudget, _workerCount, _restore);
                         planned.Add(new FileWork { Path = path, Plan = plan });
-                        Log("level bundle memory plan [" + Path.GetFileName(path) + "]: " + plan.ReservationBytes
+                        LogDebug("level bundle memory plan [" + Path.GetFileName(path) + "]: " + plan.ReservationBytes
                             + " bytes reserved, " + plan.WorkingBytes + " estimated working bytes, parallel=" + plan.Parallel
                             + (plan.Exclusive ? ", oversized file streams exclusively" : ""));
                     }
@@ -203,8 +208,13 @@ namespace DIYLevelFastInit
                     || result == InfoBundleOptimizer.Result.AlreadyOptimized
                     || result == InfoBundleOptimizer.Result.FastLayout))
                     lock (_sync) _prepared.Add(new PreparedFile { Path = path, Length = preparedLength, Modified = preparedModified });
-                Log("level bundle preparation timing [" + Path.GetFileName(path) + "]: "
-                    + StartupTimings.Ms(timer.Elapsed.TotalMilliseconds) + " ms, result=" + result);
+                string timingLine = "level bundle preparation timing [" + Path.GetFileName(path) + "]: "
+                    + StartupTimings.Ms(timer.Elapsed.TotalMilliseconds) + " ms, result=" + result;
+                if (result == InfoBundleOptimizer.Result.Replaced || result == InfoBundleOptimizer.Result.Restored
+                    || result == InfoBundleOptimizer.Result.Failed)
+                    Log(timingLine);
+                else
+                    LogDebug(timingLine);
                 switch (result)
                 {
                     case InfoBundleOptimizer.Result.Replaced: Interlocked.Increment(ref _replaced); break;
@@ -235,13 +245,23 @@ namespace DIYLevelFastInit
             }
         }
 
-        private void Log(string message) { lock (_sync) _logs.Enqueue(message); }
+        private void Log(string message) { lock (_sync) _logs.Enqueue(new LogEntry { Message = message, Debug = false }); }
+        private void LogDebug(string message) { lock (_sync) _logs.Enqueue(new LogEntry { Message = message, Debug = true }); }
 
         internal void Drain(Action<string> log)
         {
-            List<string> messages = new List<string>();
-            lock (_sync) while (_logs.Count != 0) messages.Add(_logs.Dequeue());
-            foreach (string message in messages) if (log != null) log(message);
+            Drain(log, log);
+        }
+
+        internal void Drain(Action<string> infoLog, Action<string> debugLog)
+        {
+            List<LogEntry> entries = new List<LogEntry>();
+            lock (_sync) while (_logs.Count != 0) entries.Add(_logs.Dequeue());
+            foreach (LogEntry entry in entries)
+            {
+                Action<string> target = entry.Debug ? debugLog : infoLog;
+                if (target != null) target(entry.Message);
+            }
         }
 
         public void Dispose() { _cancelled = true; }

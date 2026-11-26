@@ -29,13 +29,15 @@ namespace DIYLevelFastInit
             AssetMs += load.AssetMs;
             ExtractMs += load.ExtractMs;
             CleanupMs += load.CleanupMs;
-            FastInitPlugin.Log.LogInfo("catalog timing [" + name + "]: source="
+            string line = "catalog timing [" + name + "]: source="
                 + (load.InfoFile == null ? "skipped" : load.CacheHit ? "cache" : load.MetadataHit ? "metadata" : "bundle")
                 + ", cacheReadMs=" + Ms(load.CacheReadMs) + ", createMs=" + Ms(load.CreateMs)
                 + ", metadataReadMs=" + Ms(load.MetadataReadMs)
                 + ", publicationPauseMs=" + Ms(load.PublicationPauseMs)
                 + ", bundleMs=" + Ms(load.BundleMs) + ", assetMs=" + Ms(load.AssetMs)
-                + ", extractWriteMs=" + Ms(load.ExtractMs) + ", cleanupWaitMs=" + Ms(load.CleanupMs));
+                + ", extractWriteMs=" + Ms(load.ExtractMs) + ", cleanupWaitMs=" + Ms(load.CleanupMs);
+            if (load.CacheHit) FastInitPlugin.Log.LogDebug(line);
+            else FastInitPlugin.Log.LogInfo(line);
         }
 
         internal string Summary()

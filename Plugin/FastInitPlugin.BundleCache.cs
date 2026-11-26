@@ -157,7 +157,7 @@ namespace DIYLevelFastInit
 
         private static void UpdateInfoOptimization(InfoBundleOptimizationBatch batch)
         {
-            batch.Drain(delegate(string message) { Log.LogInfo(message); });
+            batch.Drain(delegate(string message) { Log.LogInfo(message); }, delegate(string message) { Log.LogDebug(message); });
             if (batch.Done)
             {
                 if (ReferenceEquals(_infoOptimization, batch))

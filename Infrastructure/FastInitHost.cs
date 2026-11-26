@@ -151,6 +151,18 @@ namespace DIYLevelFastInit
             result.Value = so;
         }
 
+        private static void FlushPendingMenu(ref bool menuDirty, ref bool menuNeedsHeal,
+            System.Diagnostics.Stopwatch phase, StartupTimings timings)
+        {
+            if (!menuDirty) return;
+            double menuStarted = phase.Elapsed.TotalMilliseconds;
+            if (menuNeedsHeal) FastInitPlugin.HealLevelSetButtons();
+            else FastInitPlugin.NotifySetAdded();
+            timings.MenuMs += phase.Elapsed.TotalMilliseconds - menuStarted;
+            menuDirty = false;
+            menuNeedsHeal = false;
+        }
+
         private IEnumerator LoadHeavy(string pluginDir)
         {
             FastInitPlugin.Loading = true;
@@ -206,6 +218,8 @@ namespace DIYLevelFastInit
                 FastInitPlugin.InfoFilesPreparing = false;
                 Dictionary<string, int> publishedIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
                 int sets = 0;
+                bool menuDirty = false;
+                bool menuNeedsHeal = false;
                 for (int pass = 0; pass < 2; pass++)
                 {
                     for (int index = 0; index < scannedSets.Length; index++)
@@ -215,11 +229,23 @@ namespace DIYLevelFastInit
                         DirectoryInfo dir = scanned.Directory;
                         // Conversion is pure managed I/O with no Unity requests; keep it ahead of
                         // the transition wait so scene changes do not stall the pipeline.
-                        if (convertFiles && scanned.BundlePaths.Count > 0)
+                        // Pass 0 already-fast sets publish immediately without spinning up a batch;
+                        // only Pass 1 sets needing real conversion/restore run PrepareSetInfoFiles.
+                        if (pass == 0)
                         {
-                            double convertStarted = phase.Elapsed.TotalMilliseconds;
-                            yield return Guard(FastInitPlugin.PrepareSetInfoFiles(dir.FullName, scanned.BundlePaths), "info prepare " + dir.Name);
-                            preparationMs += phase.Elapsed.TotalMilliseconds - convertStarted;
+                            if (convertFiles) FastInitPlugin.InfoOptimizationDone += scanned.BundlePaths.Count;
+                            if (scanned.CachedMetadata == null)
+                                FlushPendingMenu(ref menuDirty, ref menuNeedsHeal, phase, timings);
+                        }
+                        else
+                        {
+                            FlushPendingMenu(ref menuDirty, ref menuNeedsHeal, phase, timings);
+                            if (convertFiles && scanned.BundlePaths.Count > 0)
+                            {
+                                double convertStarted = phase.Elapsed.TotalMilliseconds;
+                                yield return Guard(FastInitPlugin.PrepareSetInfoFiles(dir.FullName, scanned.BundlePaths), "info prepare " + dir.Name);
+                                preparationMs += phase.Elapsed.TotalMilliseconds - convertStarted;
+                            }
                         }
                         double pauseStarted = phase.Elapsed.TotalMilliseconds;
                         while (OnDemandResources.IsTransitioning || PseudoPrefabManager.isInCustomLevel)
@@ -258,19 +284,17 @@ namespace DIYLevelFastInit
                         }
                         KeyValuePair<string, LevelSetInfoSO> entry =
                             new KeyValuePair<string, LevelSetInfoSO>(dir.FullName, load.So);
-                        double menuStarted = phase.Elapsed.TotalMilliseconds;
                         if (insertAt == infos.Count)
                         {
                             infos.Add(entry);
-                            FastInitPlugin.NotifySetAdded();
                         }
                         else
                         {
                             infos.Insert(insertAt, entry);
-                            FastInitPlugin.HealLevelSetButtons();
+                            menuNeedsHeal = true;
                         }
+                        menuDirty = true;
                         publishedIndex[dir.FullName] = index;
-                        timings.MenuMs += phase.Elapsed.TotalMilliseconds - menuStarted;
                         double snapshotStarted = phase.Elapsed.TotalMilliseconds;
                         if (pass == 0 && scanned.Snapshot != null && load.InfoFile != null
                             && string.Equals(scanned.Snapshot.InfoFileName, load.InfoFile.Name, StringComparison.OrdinalIgnoreCase)
@@ -286,8 +310,9 @@ namespace DIYLevelFastInit
                         timings.SnapshotMs += phase.Elapsed.TotalMilliseconds - snapshotStarted;
                         sets++;
                         FastInitPlugin.Log.LogInfo("level set [" + dir.Name + "] ready (" + sets + " total, metadata only)");
-                        if (slice.Elapsed.TotalMilliseconds >= 4)
+                        if (slice.Elapsed.TotalMilliseconds >= 12)
                         {
+                            FlushPendingMenu(ref menuDirty, ref menuNeedsHeal, phase, timings);
                             double yieldStarted = phase.Elapsed.TotalMilliseconds;
                             yield return null;
                             timings.YieldWaitMs += phase.Elapsed.TotalMilliseconds - yieldStarted;
@@ -296,6 +321,7 @@ namespace DIYLevelFastInit
                         }
                     }
                 }
+                FlushPendingMenu(ref menuDirty, ref menuNeedsHeal, phase, timings);
                 catalogMs = phase.Elapsed.TotalMilliseconds;
 
                 FastInitPlugin.Log.LogInfo("FastInit complete: " + sets + " level sets available");
