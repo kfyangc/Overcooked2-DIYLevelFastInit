@@ -81,6 +81,8 @@ namespace DIYLevelFastInit
         // Standalone blocker present: FastInit core keeps running, only the integrated
         // failure hooks stay disabled while the uninstall dialog is pending.
         private PluginConflictDialog _blockerConflict;
+        internal static StartupCatalogScan _startupScan;
+        internal static CatalogMetadataPool _catalogPool;
 
         private void Awake()
         {
@@ -155,6 +157,8 @@ namespace DIYLevelFastInit
             if (_resourceFailureBlocker != null) _resourceFailureBlocker.Dispose();
             if (_infoOptimization != null) _infoOptimization.Dispose();
             if (_catalogRead != null) _catalogRead.Dispose();
+            if (_catalogPool != null) _catalogPool.Dispose();
+            if (_startupScan != null) _startupScan.Dispose();
             OnDemandResources.ResetSaveSelection();
             ClientLoadGate.Cancel("plugin shutdown");
             OnDemandResources.CancelServerPreparation("plugin shutdown");

@@ -107,6 +107,18 @@ namespace DIYLevelFastInit
                 Log.LogInfo("startup level bundle preparation complete [" + setName + "]: "
                     + batch.Completed + "/" + batch.Total + " files");
                 InfoOptimizationDone += batch.Completed;
+                if (!RestoreInfoFilesOnStartup && batch.Done)
+                {
+                    foreach (InfoBundleOptimizationBatch.PreparedFile prepared in batch.PreparedFiles)
+                    {
+                        CatalogIndexStore.Default.UpsertFastFile(
+                            Path.GetDirectoryName(prepared.Path),
+                            Path.GetFileName(prepared.Path),
+                            prepared.Length,
+                            prepared.Modified,
+                            FastFileStamp.KindFastBundle);
+                    }
+                }
             }
             finally
             {
@@ -145,7 +157,7 @@ namespace DIYLevelFastInit
 
         private static void UpdateInfoOptimization(InfoBundleOptimizationBatch batch)
         {
-            batch.Drain(delegate(string message) { Log.LogInfo(message); });
+            batch.Drain(delegate(string message) { Log.LogInfo(message); }, delegate(string message) { Log.LogDebug(message); });
             if (batch.Done)
             {
                 if (ReferenceEquals(_infoOptimization, batch))

@@ -119,8 +119,10 @@ namespace DIYLevelFastInit
                 failed.Value = failed.Value || batch.Failed != 0 || batch.Completed != batch.Total;
                 foreach (InfoBundleOptimizationBatch.PreparedFile file in batch.PreparedFiles)
                 {
-                    SetSnapshot set = source.Sets[Path.GetDirectoryName(file.Path)];
+                    string fileDir = Path.GetDirectoryName(file.Path);
                     string name = Path.GetFileName(file.Path);
+                    CatalogIndexStore.Default.UpsertFastFile(fileDir, name, file.Length, file.Modified, FastFileStamp.KindFastBundle);
+                    SetSnapshot set = source.Sets[fileDir];
                     foreach (LevelDirectorySnapshot.FileStamp stamp in set.Files)
                         if (string.Equals(stamp.Name, name, StringComparison.OrdinalIgnoreCase))
                         {

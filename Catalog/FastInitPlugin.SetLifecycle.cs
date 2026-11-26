@@ -28,6 +28,7 @@ namespace DIYLevelFastInit
                 Log.LogWarning("sync: sweep of [" + key + "] failed: " + e.Message);
             }
             LevelCatalogCache.DestroyLightweight(infos[idx].Value);
+            CatalogIndexStore.Default.RemoveDirectory(key);
             Snapshots.Remove(key);
             infos.RemoveAt(idx);
         }

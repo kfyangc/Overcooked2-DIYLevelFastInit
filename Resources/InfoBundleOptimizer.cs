@@ -66,6 +66,7 @@ namespace DIYLevelFastInit
                     }
                     if (!UnityFsRepacker.NeedsConversion(source))
                     {
+                        preparedLength = length; preparedModified = ticks;
                         Log(log, "level bundle layout already fast (raw/LZ4); original kept: " + source);
                         return Result.FastLayout;
                     }
@@ -91,6 +92,7 @@ namespace DIYLevelFastInit
                     }
                     if (!UnityFsRepacker.NeedsConversion(source))
                     {
+                        preparedLength = initialLength; preparedModified = initialModified;
                         Log(log, "level bundle layout already fast (raw/LZ4); original kept: " + source);
                         return Result.FastLayout;
                     }
