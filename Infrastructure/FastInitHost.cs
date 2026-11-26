@@ -173,35 +173,52 @@ namespace DIYLevelFastInit
                 phase.Reset();
                 phase.Start();
                 System.Diagnostics.Stopwatch slice = System.Diagnostics.Stopwatch.StartNew();
-                List<DirectoryInfo> dirs = SafeGetDirs(Path.Combine(pluginDir, "levels"));
-                FastInitPlugin.TotalSets = dirs.Count;
-                // Per-set pipeline: convert one set's bundles, then catalog and publish it
-                // right away, so the level-set menu fills in while later sets still prepare.
+                string levelsDir = Path.Combine(pluginDir, "levels");
                 bool convertFiles = FastInitPlugin.OptimizeInfoFilesOnStartup || FastInitPlugin.RestoreInfoFilesOnStartup;
-                List<string>[] setFiles = convertFiles ? FastInitPlugin.CollectSetBundlePaths(dirs) : null;
+                StartupCatalogScan scan = new StartupCatalogScan(levelsDir,
+                    FastInitPlugin.OptimizeInfoFilesOnStartup, FastInitPlugin.RestoreInfoFilesOnStartup);
+                FastInitPlugin._startupScan = scan;
+                StartupCatalogScan.ScannedSet[] scannedSets;
+                try
+                {
+                    scan.Start();
+                    while (!scan.Done) yield return null;
+                    if (scan.Cancelled) yield break;
+                    foreach (string warning in scan.Warnings) FastInitPlugin.Log.LogWarning(warning);
+                    scannedSets = scan.Sets;
+                    FastInitPlugin.Log.LogInfo("startup catalog scan: " + scannedSets.Length + " sets, "
+                        + scan.TotalBundleFiles + " bundles, scanMs=" + StartupTimings.Ms(scan.TotalScanMs)
+                        + " (indexLoadMs=" + StartupTimings.Ms(scan.IndexLoadMs)
+                        + ", dirScanMs=" + StartupTimings.Ms(scan.DirScanMs)
+                        + ", headerProbeMs=" + StartupTimings.Ms(scan.HeaderProbeMs)
+                        + ", cacheLookupMs=" + StartupTimings.Ms(scan.CacheLookupMs)
+                        + ", fastHits=" + scan.FastFileHits + ", headerProbes=" + scan.HeaderProbes
+                        + ", unifiedIndex=" + scan.IndexLoadedFromDisk + ")");
+                    FastInitPlugin.InfoOptimizationTotal = scan.TotalBundleFiles;
+                }
+                finally
+                {
+                    scan.Dispose();
+                    if (ReferenceEquals(FastInitPlugin._startupScan, scan)) FastInitPlugin._startupScan = null;
+                }
+                FastInitPlugin.TotalSets = scannedSets.Length;
                 FastInitPlugin.InfoOptimizationDone = 0;
-                // Two rounds: sets needing no conversion work publish first (directory
-                // order within a round), so already-prepared sets are not stuck behind
-                // slow conversions. Entries insert at their directory position below,
-                // keeping the final levelSetInfos order equal to directory order.
-                bool[] needsWork = new bool[dirs.Count];
-                if (setFiles != null)
-                    for (int i = 0; i < dirs.Count; i++)
-                        needsWork[i] = FastInitPlugin.SetNeedsConversionWork(setFiles[i], FastInitPlugin.RestoreInfoFilesOnStartup);
+                FastInitPlugin.InfoFilesPreparing = false;
                 Dictionary<string, int> publishedIndex = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
                 int sets = 0;
                 for (int pass = 0; pass < 2; pass++)
                 {
-                    for (int index = 0; index < dirs.Count; index++)
+                    for (int index = 0; index < scannedSets.Length; index++)
                     {
-                        if (needsWork[index] != (pass == 1)) continue;
-                        DirectoryInfo dir = dirs[index];
+                        StartupCatalogScan.ScannedSet scanned = scannedSets[index];
+                        if (scanned.NeedsConversionWork != (pass == 1)) continue;
+                        DirectoryInfo dir = scanned.Directory;
                         // Conversion is pure managed I/O with no Unity requests; keep it ahead of
                         // the transition wait so scene changes do not stall the pipeline.
-                        if (setFiles != null && setFiles[index].Count > 0)
+                        if (convertFiles && scanned.BundlePaths.Count > 0)
                         {
                             double convertStarted = phase.Elapsed.TotalMilliseconds;
-                            yield return Guard(FastInitPlugin.PrepareSetInfoFiles(dir.FullName, setFiles[index]), "info prepare " + dir.Name);
+                            yield return Guard(FastInitPlugin.PrepareSetInfoFiles(dir.FullName, scanned.BundlePaths), "info prepare " + dir.Name);
                             preparationMs += phase.Elapsed.TotalMilliseconds - convertStarted;
                         }
                         double pauseStarted = phase.Elapsed.TotalMilliseconds;
@@ -209,7 +226,24 @@ namespace DIYLevelFastInit
                             yield return null;
                         timings.PausedMs += phase.Elapsed.TotalMilliseconds - pauseStarted;
                         InfoLoad load = new InfoLoad();
-                        yield return Guard(FastInitPlugin.LoadInfoSet(dir, load), "catalog " + dir.Name);
+                        if (pass == 0)
+                        {
+                            if (scanned.InfoFile == null)
+                            {
+                                FastInitPlugin.Log.LogWarning("missing info file: " + dir.Name);
+                            }
+                            else
+                            {
+                                yield return Guard(FastInitPlugin.LoadInfoSet(dir, load, scanned.InfoFile,
+                                    scanned.CachedMetadata, scanned.CacheMiss, scanned.CacheReadMs, false),
+                                    "catalog " + dir.Name);
+                            }
+                        }
+                        else
+                        {
+                            yield return Guard(FastInitPlugin.LoadInfoSet(dir, load, null, null, null, 0, false),
+                                "catalog " + dir.Name);
+                        }
                         timings.Add(dir.Name, load);
                         if (load.So == null) continue;
                         // Insert at the directory-order position; quick sets append while
@@ -238,7 +272,17 @@ namespace DIYLevelFastInit
                         publishedIndex[dir.FullName] = index;
                         timings.MenuMs += phase.Elapsed.TotalMilliseconds - menuStarted;
                         double snapshotStarted = phase.Elapsed.TotalMilliseconds;
-                        FastInitPlugin.Snapshots[dir.FullName] = FastInitPlugin.ReadSnapshot(dir, load.InfoFile);
+                        if (pass == 0 && scanned.Snapshot != null && load.InfoFile != null
+                            && string.Equals(scanned.Snapshot.InfoFileName, load.InfoFile.Name, StringComparison.OrdinalIgnoreCase)
+                            && scanned.Snapshot.InfoLength == load.InfoFile.Length
+                            && scanned.Snapshot.InfoMtimeUtc.Ticks == load.InfoFile.LastWriteTimeUtc.Ticks)
+                        {
+                            FastInitPlugin.Snapshots[dir.FullName] = scanned.Snapshot;
+                        }
+                        else
+                        {
+                            FastInitPlugin.Snapshots[dir.FullName] = FastInitPlugin.ReadSnapshot(dir, load.InfoFile);
+                        }
                         timings.SnapshotMs += phase.Elapsed.TotalMilliseconds - snapshotStarted;
                         sets++;
                         FastInitPlugin.Log.LogInfo("level set [" + dir.Name + "] ready (" + sets + " total, metadata only)");
@@ -280,6 +324,7 @@ namespace DIYLevelFastInit
                 // Per-set conversion interleaves with the catalog loop, so infoPreparationMs
                 // is a subset of catalogMs, not a phase preceding it.
                 FastInitPlugin.FinishStartupInfoPreparation();
+                LevelCatalogCache.FlushIndex();
                 FastInitPlugin.Log.LogInfo("startup timing: complete=" + complete + ", totalMs=" + StartupTimings.Ms(startup.Elapsed.TotalMilliseconds)
                     + ", infoPreparationMs=" + StartupTimings.Ms(preparationMs) + ", commonMs=" + StartupTimings.Ms(commonMs)
                     + ", catalogMs=" + StartupTimings.Ms(catalogMs) + ", " + timings.Summary());

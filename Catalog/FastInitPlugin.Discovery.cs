@@ -33,15 +33,42 @@ namespace DIYLevelFastInit
 
         internal static IEnumerator LoadInfoSet(DirectoryInfo dir, InfoLoad result)
         {
-            List<FileInfo> files = FastInitHost.SafeGetFiles(dir, "info*");
-            if (files.Count == 0)
+            return LoadInfoSet(dir, result, null, null, null, 0, true);
+        }
+
+        internal static IEnumerator LoadInfoSet(DirectoryInfo dir, InfoLoad result, FileInfo knownInfoFile,
+            SetMetadata prefetchedCache, string prefetchedMiss, double prefetchedReadMs, bool flushIndexImmediately)
+        {
+            if (knownInfoFile != null)
             {
-                Log.LogWarning("missing info file: " + dir.Name);
-                yield break;
+                result.InfoFile = knownInfoFile;
             }
-            result.InfoFile = files[0];
-            result.So = LevelCatalogCache.TryRead(dir, result.InfoFile, result);
-            if (result.So != null) yield break;
+            else
+            {
+                List<FileInfo> files = FastInitHost.SafeGetFiles(dir, "info*");
+                if (files.Count == 0)
+                {
+                    Log.LogWarning("missing info file: " + dir.Name);
+                    yield break;
+                }
+                result.InfoFile = files[0];
+            }
+            if (prefetchedCache != null)
+            {
+                result.CacheReadMs = prefetchedReadMs;
+                result.So = LevelCatalogCache.CreateFromCachedMetadata(dir, prefetchedCache, result);
+                if (result.So != null) yield break;
+            }
+            else if (prefetchedMiss != null)
+            {
+                result.CacheReadMs = prefetchedReadMs;
+                result.CacheMiss = prefetchedMiss;
+            }
+            else
+            {
+                result.So = LevelCatalogCache.TryRead(dir, result.InfoFile, result);
+                if (result.So != null) yield break;
+            }
             Log.LogInfo("catalog cache miss [" + dir.Name + "]: " + result.CacheMiss);
 
             if (UseDirectCatalogReader)
@@ -79,7 +106,7 @@ namespace DIYLevelFastInit
                             try
                             {
                                 FileInfo current = new FileInfo(result.InfoFile.FullName);
-                                result.So = LevelCatalogCache.CreateAndStore(dir, current, request.Data);
+                                result.So = LevelCatalogCache.CreateAndStore(dir, current, request.Data, flushIndexImmediately);
                                 result.InfoFile = current;
                                 result.MetadataHit = true;
                                 Log.LogInfo("catalog metadata read [" + dir.Name + "]: " + result.So.levelInfos.Length
@@ -114,7 +141,7 @@ namespace DIYLevelFastInit
                 timer.Reset();
                 timer.Start();
                 if (full.Value != null)
-                    result.So = LevelCatalogCache.Extract(dir, result.InfoFile, full.Value);
+                    result.So = LevelCatalogCache.Extract(dir, result.InfoFile, full.Value, flushIndexImmediately);
                 else
                     Log.LogWarning("missing LevelSetInfo in " + dir.Name);
                 result.ExtractMs = timer.Elapsed.TotalMilliseconds;

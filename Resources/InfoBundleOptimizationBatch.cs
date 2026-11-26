@@ -199,7 +199,9 @@ namespace DIYLevelFastInit
                 InfoBundleOptimizer.Result result = _restore
                     ? InfoBundleOptimizer.Restore(path, () => _cancelled, Log)
                     : InfoBundleOptimizer.Optimize(path, () => _cancelled, Log, out preparedLength, out preparedModified, _scheduler, file.Plan);
-                if (preparedLength > 0 && (result == InfoBundleOptimizer.Result.Replaced || result == InfoBundleOptimizer.Result.AlreadyOptimized))
+                if (preparedLength > 0 && (result == InfoBundleOptimizer.Result.Replaced
+                    || result == InfoBundleOptimizer.Result.AlreadyOptimized
+                    || result == InfoBundleOptimizer.Result.FastLayout))
                     lock (_sync) _prepared.Add(new PreparedFile { Path = path, Length = preparedLength, Modified = preparedModified });
                 Log("level bundle preparation timing [" + Path.GetFileName(path) + "]: "
                     + StartupTimings.Ms(timer.Elapsed.TotalMilliseconds) + " ms, result=" + result);
