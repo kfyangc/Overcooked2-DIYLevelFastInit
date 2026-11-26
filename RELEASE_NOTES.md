@@ -1,3 +1,21 @@
+# 1.10.0-beta.1
+
+## 中文（预发布测试版）
+
+新增共享依赖包（`common0*` / `commonW*`）原地 LZ4HC 转换，大幅降低共享依赖包的内存占用与加载耗时，并简化进图前共享依赖等待逻辑。
+
+- **共享依赖包原地转换为 128 KiB LZ4HC**：新增配置 `Loading.OptimizeSharedCommonBundlesOnStartup`（默认 `true`，重启生效）。启动时检查 DIYLevel `common0*`（不含同步加载的 `common`）及接管的 WLoader `commonW*` 共享包，将 LZMA 压缩文件经校验后原地替换为等价的 128 KiB 独立块 LZ4HC 包（不保留旧备份；已校验的快速包指纹记录在 `catalog.index`，后续启动免探测并直接在第 0 帧发起加载）。转换按文件由小到大在单个受内存预算约束的批次中执行，每完成一个即流式加载，转换期间延后 Pass-1 关卡集转换及手动/自动热刷新，并在右上角角标显示 `DIY common` 与实时转换进度。
+- **简化进图前共享包门禁**：LZ4HC 共享包加载快且内存驻留低，进图前不再构建逐关 `common*` 依赖图，改为直接等待全部共享包就绪（全部就绪时零等待，未就绪时将进行中请求提升至最高优先级；转换期间等待超时自动从默认 60 秒放宽至 300 秒，并保留 20 秒无进展停滞检测与进图引用兜底校验）。
+- **边界与生命周期加固**：共享包发生替换时自动失效封面预览缓存；正确追踪外部已加载的共享包避免重复加载；插件卸载时安全取消进行中的共享包转换。
+
+## English (Pre-release)
+
+Adds in-place 128 KiB LZ4HC conversion for shared dependency packs (`common0*` and `commonW*`), significantly reducing their load time and resident memory, and simplifies pre-entry shared-bundle gating.
+
+- **In-place 128 KiB LZ4HC conversion for shared packs**: Adds `Loading.OptimizeSharedCommonBundlesOnStartup` (default `true`, restart required). On startup, checks DIYLevel `common0*` (excluding synchronous `common`) and taken-over WLoader `commonW*` packs and replaces LZMA-compressed files in place with verified, content-equivalent 128 KiB independent-block LZ4HC bundles (no backup retained; verified fast-bundle stamps are stored in `catalog.index` so subsequent launches skip probes and dispatch on frame 0). Conversion runs smallest-first in a single memory-budgeted batch, streaming each verified bundle straight into `AssetBundle.LoadFromFileAsync`, deferring Pass-1 level-set conversion and manual/auto refresh until done, and showing live `DIY common` progress in the corner label.
+- **Simplified pre-entry shared-bundle gate**: Because LZ4HC shared packs settle quickly with low resident memory, level entry no longer scans a per-level `common*` dependency graph and instead awaits all shared packs (short-circuiting when ready, boosting in-flight requests to top priority otherwise; timeout extends from the default 60 s to 300 s while converting, keeping the 20 s stall guard and `EnsureResolvedReferences` safety net).
+- **Lifecycle & edge-case guards**: Invalidates cover preview cache entries on shared-bundle replacement, tracks externally loaded shared bundles to avoid duplicate loads, and cancels in-flight shared conversion batches cleanly on plugin shutdown.
+
 # 1.9.12
 
 ## 中文

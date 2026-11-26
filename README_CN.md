@@ -4,6 +4,12 @@
 
 [English README](README.md)
 
+## 1.10.0-beta.1（预发布测试版）
+
+[发布说明](RELEASE_NOTES.md#1100-beta1)
+
+新增共享依赖包（DIYLevel `common0*` 与接管的 WLoader `commonW*`，不含同步加载的 `common`）原地 128 KiB LZ4HC 转换（`Loading.OptimizeSharedCommonBundlesOnStartup`，默认开启），显著降低共享包加载时间与内存驻留，已校验指纹记入 `catalog.index` 免重复探测；进图前改为直接等待全部共享包就绪（转换期间超时放宽至 300 秒，不再构建逐关 `common*` 依赖图），并延后转换期间的 Pass-1 关卡集转换与热刷新。
+
 ## 1.9.12
 
 [发布说明](RELEASE_NOTES.md#1912)

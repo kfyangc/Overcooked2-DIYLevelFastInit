@@ -4,6 +4,12 @@ Startup and memory optimization for the [OC2DIYLevel](https://github.com/gua248/
 
 [中文说明](README_CN.md)
 
+## Version 1.10.0-beta.1 (Pre-release)
+
+[Release notes](RELEASE_NOTES.md#1100-beta1)
+
+Adds in-place 128 KiB LZ4HC conversion for shared dependency bundles (DIYLevel `common0*` and taken-over WLoader `commonW*`, excluding synchronous `common`) via `Loading.OptimizeSharedCommonBundlesOnStartup` (default `true`), significantly reducing load time and resident memory with verified stamps cached in `catalog.index`; simplifies level entry to await all shared packs directly (extending the wait timeout to 300 s while converting, removing per-level `common*` dependency graph scans), and defers Pass-1 set conversion and hot refresh while shared conversion runs.
+
 ## Version 1.9.12
 
 [Release notes](RELEASE_NOTES.md#1912)
