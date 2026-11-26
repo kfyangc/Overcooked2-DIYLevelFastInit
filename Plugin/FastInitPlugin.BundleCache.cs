@@ -18,6 +18,8 @@ namespace DIYLevelFastInit
                     "Build missing catalog files by reading scalar metadata without native info assets. Unsupported bundles fall back to the native scanner. Restart after changing this option.").Value;
                 OptimizeInfoFilesOnStartup = Config.Bind("Loading", "OptimizeInfoBundlesOnStartup", true,
                     "Check all top-level UnityFS bundles in custom level sets, including info*, s_* and custom_recipes, and replace LZMA-compressed files with equivalent LZ4HC files before discovering levels; fast raw/LZ4 layouts are kept as-is. Verified replacements do not retain original files. Restart after changing this option.").Value;
+                OptimizeSharedCommonBundlesOnStartup = Config.Bind("Loading", "OptimizeSharedCommonBundlesOnStartup", true,
+                    "Check shared dependency bundles (DIYLevel common0* and taken-over WLoader commonW*, excluding synchronous common) and replace LZMA-compressed files with equivalent 128 KiB LZ4HC files in place before loading them, so Unity reads only referenced chunks on demand instead of holding the full ~900 MiB decompressed payload in memory. Verified replacements do not retain original files. Restart after changing this option.").Value;
                 RestoreInfoFilesOnStartup = Config.Bind("Loading", "RestoreOriginalInfoBundlesOnStartup", false,
                     "Restore legacy backed-up original bundles on startup. New successful conversions retain no originals. Restoration takes precedence over optimization. Restart after changing this option.").Value;
                 InfoBundleOptimizationBatch.MemoryBudgetBytes = Math.Max(16, Math.Min(2048, Config.Bind("Loading", "ConversionMemoryBudgetMiB", 800,

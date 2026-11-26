@@ -198,6 +198,13 @@ namespace DIYLevelFastInit
                         DirectoryInfo dir = dirs[index];
                         // Conversion is pure managed I/O with no Unity requests; keep it ahead of
                         // the transition wait so scene changes do not stall the pipeline.
+                        // Pass 1 sets needing real conversion wait for shared common* conversion
+                        // so only one memory-budgeted conversion batch runs at a time, while Pass 0
+                        // already-fast sets still publish immediately without waiting.
+                        if (pass == 1)
+                        {
+                            while (WLoaderInterop.IsConvertingSharedBundles) yield return null;
+                        }
                         if (setFiles != null && setFiles[index].Count > 0)
                         {
                             double convertStarted = phase.Elapsed.TotalMilliseconds;

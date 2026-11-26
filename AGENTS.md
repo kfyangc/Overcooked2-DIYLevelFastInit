@@ -377,10 +377,25 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 - `LevelConfigFactory` binds the installed `SetupConfig` signature. For 0.11.1, initialize the
   standard and Horde template descriptors before setting `commonBundle` and keep the factory
   call-site hooks that track owned allocations and diagnose missing resources.
-- `WLoaderInterop` coordinates parallel background loading for both DIYLevel `common*`
-  (excluding synchronous `common`) and taken-over WLoader `commonW<digits>` shared dependency
-  bundles at equal priority, starting right at the beginning of `LoadHeavy` without blocking
-  catalog publication and reaping each request as soon as it finishes. A Harmony prefix on
+- `WLoaderInterop` coordinates parallel background loading (and optional in-place 128 KiB
+  LZ4HC conversion via `Loading.OptimizeSharedCommonBundlesOnStartup`, default `true`) for
+  both DIYLevel `common*` (excluding synchronous `common`) and taken-over WLoader
+  `commonW<digits>` shared dependency bundles at equal priority, starting right at the
+  beginning of `LoadHeavy` without blocking catalog publication and reaping each request as
+  soon as it finishes. When any owned shared bundle is LZMA-compressed (or has leftover
+  `.diylevel-fastinit` recovery files / restore mode enabled), `LoadSharedBundles` marks
+  those names converting before yielding, pre-indexes every shared bundle's CAB names and
+  outgoing CAB edges into memory (`_cabBundles` / `_sharedBundleRefs`) so `NeededBundles`
+  never contends with `File.Replace`, and runs one `InfoBundleOptimizationBatch` ordered
+  smallest-first that streams each verified replacement directly into
+  `AssetBundle.LoadFromFileAsync` (while already-fast bundles dispatch on frame 0). Level
+  entry promotes queued needed bundles (`Prioritize`), never starts competing `RequestMissing`
+  loads on converting files, waits in `EnsureBundlesSync` before sync fallback, tracks live
+  conversion progress in `PendingFraction` / `OverallWorkUnits` (extending timeout to 300 s
+  while actively converting, keeping the 20 s stall guard), invalidates `ThumbnailCache` on
+  replacement, and defers Pass-1 level-set conversion, hot refresh, and thumbnail warmup
+  until shared conversion finishes so only one memory-budgeted conversion batch runs at once.
+  `FastInitPlugin.OnDestroy` cancels the batch via `WLoaderInterop.Shutdown()`. A Harmony prefix on
   WLoader's private `IsBundleLoaded(string)` probe (installed from `Awake`, optionally via an
   early `Assembly.LoadFrom` of `Loader.dll`) reports `commonW<digits>` names as resident, so
   its serial background queue skips them; `OwnsSharedBundle` (also resolving `_loaderDir` from

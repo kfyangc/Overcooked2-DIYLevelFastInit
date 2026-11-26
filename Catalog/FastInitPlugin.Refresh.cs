@@ -21,6 +21,11 @@ namespace DIYLevelFastInit
                 Log.LogInfo("sync skipped: initial load or previous sync still running");
                 return;
             }
+            if (WLoaderInterop.IsConvertingSharedBundles)
+            {
+                Log.LogInfo("sync skipped: shared common bundles are still optimizing");
+                return;
+            }
             if (!DIYLevelAssetBundleManager.IsInitialized)
             {
                 Log.LogInfo("sync skipped: DIY level manager not initialized");

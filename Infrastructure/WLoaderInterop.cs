@@ -46,9 +46,55 @@ namespace DIYLevelFastInit
         // External CAB name -> normalized dependency bundle file (WLoader commonW* and DIYLevel common*).
         private static readonly Dictionary<string, string> _cabBundles =
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Normalized shared bundle path -> outgoing CAB references cached before in-place conversion
+        // so NeededBundles never has to open a shared bundle while InfoBundleOptimizer replaces it.
+        private static readonly Dictionary<string, string[]> _sharedBundleRefs =
+            new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+        private static readonly HashSet<string> _indexedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly HashSet<string> _indexedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         // Bundles whose headers could not be indexed; conservatively included in NeededBundles.
         private static readonly List<string> _unindexedBundles = new List<string>();
         private static bool _cabsIndexed;
+        // Background LZ4HC conversion batch for shared common* / commonW* bundles; each bundle
+        // streams directly into AssetBundle.LoadFromFileAsync as soon as its replacement settles.
+        private static InfoBundleOptimizationBatch _conversionBatch;
+        private static readonly HashSet<string> _convertingNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private static readonly HashSet<string> _prioritizedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private static float _conversionStartedRealtime;
+        private static bool _conversionRestore;
+        private static bool _shutdown;
+
+        internal static bool IsConvertingSharedBundles
+        {
+            get { return _conversionBatch != null && !_conversionBatch.Done; }
+        }
+
+        internal static float ConversionStartedRealtime
+        {
+            get { return _conversionStartedRealtime; }
+        }
+
+        internal static string OptimizationProgress
+        {
+            get
+            {
+                InfoBundleOptimizationBatch batch = _conversionBatch;
+                if (batch == null || batch.Done) return null;
+                string current = batch.Current;
+                return (_conversionRestore ? "restoring " : "optimizing ")
+                    + batch.Completed + "/" + batch.Total
+                    + (string.IsNullOrEmpty(current) ? "" : ": " + current);
+            }
+        }
+
+        internal static void Shutdown()
+        {
+            _shutdown = true;
+            InfoBundleOptimizationBatch batch = _conversionBatch;
+            if (batch != null) batch.Dispose();
+            _convertingNames.Clear();
+            _prioritizedNames.Clear();
+        }
 
         internal static void TryInstall()
         {
@@ -205,9 +251,11 @@ namespace DIYLevelFastInit
             if (_settled.Add(name)) SettledRevision++;
         }
 
-        // Loads DIYLevel common* (excluding "common") and taken-over WLoader commonW*
-        // bundles concurrently in the same frame with equal priority, reaping each
-        // request as soon as it completes so catalog publication never blocks on them.
+        // Converts LZMA shared bundles (DIYLevel common0* and taken-over WLoader commonW*)
+        // to 128 KiB LZ4HC in place before loading them so Unity maps only referenced chunks
+        // instead of holding the full ~900 MiB decompressed payload in memory. Already-fast
+        // bundles dispatch on frame 0; converting bundles stream into LoadFromFileAsync one
+        // by one as soon as each verified replacement finishes.
         internal static IEnumerator LoadSharedBundles(string diyPluginDir)
         {
             List<FileInfo> batch = new List<FileInfo>();
@@ -274,8 +322,11 @@ namespace DIYLevelFastInit
                 yield break;
             }
 
-            List<FileInfo> pending = new List<FileInfo>();
-            List<AssetBundleCreateRequest> requests = new List<AssetBundleCreateRequest>();
+            List<FileInfo> readyNow = new List<FileInfo>();
+            List<FileInfo> toConvert = new List<FileInfo>();
+            bool restore = FastInitPlugin.RestoreInfoFilesOnStartup;
+            bool optimize = !restore && FastInitPlugin.OptimizeSharedCommonBundlesOnStartup;
+
             FastInitPlugin.Log.LogInfo("shared dependency bundles: " + batch.Count
                 + " files (parallel: " + diyFiles + " DIYLevel, " + wloaderFiles + " WLoader)");
             foreach (FileInfo file in batch)
@@ -299,68 +350,251 @@ namespace DIYLevelFastInit
                     FastInitPlugin.Log.LogInfo("skip " + file.Name + ": already loading by another plugin");
                     continue;
                 }
-                AssetBundleCreateRequest request;
-                try { request = AssetBundle.LoadFromFileAsync(file.FullName); }
-                catch (Exception e)
-                {
-                    FastInitPlugin.Log.LogWarning("shared bundle request failed [" + file.Name + "]: " + e.Message);
-                    request = null;
-                }
-                if (request == null)
-                {
-                    MarkSettled(file.Name);
-                    continue;
-                }
-                _takeoverLoads[file.Name] = request;
-                requests.Add(request);
-                pending.Add(file);
+                if ((optimize || restore) && FileNeedsSharedWork(file.FullName, restore))
+                    toConvert.Add(file);
+                else
+                    readyNow.Add(file);
             }
 
+            List<FileInfo> pending = new List<FileInfo>();
+            List<AssetBundleCreateRequest> requests = new List<AssetBundleCreateRequest>();
+            List<bool> reaped = new List<bool>();
+            int remaining = 0, loaded = 0, failed = 0;
+            bool anyReplaced = false;
+            Dictionary<string, FileInfo> convertingByPath = new Dictionary<string, FileInfo>(StringComparer.OrdinalIgnoreCase);
+
             float started = Time.realtimeSinceStartup;
-            float nextNotice = started + 15f;
-            bool[] reaped = new bool[requests.Count];
-            int remaining = requests.Count;
-            int loaded = 0, failed = 0;
-            while (remaining > 0)
+            try
             {
-                for (int i = 0; i < requests.Count; i++)
+                // Dispatch already-fast bundles immediately so warm launches incur zero wait.
+                foreach (FileInfo file in readyNow)
+                    DispatchSharedLoad(file, pending, requests, reaped, ref remaining, ref skipped);
+
+                if (toConvert.Count > 0 && !_shutdown)
                 {
-                    if (reaped[i] || !requests[i].isDone) continue;
-                    reaped[i] = true;
-                    remaining--;
-                    FileInfo file = pending[i];
-                    _takeoverLoads.Remove(file.Name);
-                    AssetBundle bundle = requests[i].assetBundle;
-                    if (bundle == null)
+                    // Mark converting names synchronously BEFORE the first yield so entry's
+                    // RequestMissing can never race PreIndexSharedBundles on an LZMA file.
+                    for (int i = 0; i < toConvert.Count; i++)
+                        _convertingNames.Add(toConvert[i].Name);
+
+                    // Index every shared bundle's CAB names and outgoing CAB edges BEFORE
+                    // starting in-place replacement so NeededBundles reads from memory and
+                    // never contends with File.Replace on disk.
+                    yield return PreIndexSharedBundles(diyPluginDir);
+                    if (_shutdown) yield break;
+
+                    // Convert smallest files first so light shared bundles become ready within
+                    // seconds while heavy commonW* packs stream concurrently behind them.
+                    toConvert.Sort(CompareByLengthThenName);
+                    string[] convertPaths = new string[toConvert.Count];
+                    for (int i = 0; i < toConvert.Count; i++)
                     {
-                        // Completed failed requests can safely fall back to a sync load.
-                        try { bundle = AssetBundle.LoadFromFile(file.FullName); }
-                        catch (Exception e) { FastInitPlugin.Log.LogWarning("shared bundle sync retry failed [" + file.Name + "]: " + e.Message); }
+                        string full = NormalizePath(toConvert[i].FullName);
+                        convertPaths[i] = full;
+                        convertingByPath[full] = toConvert[i];
                     }
-                    if (bundle != null)
+                    _conversionRestore = restore;
+                    _conversionStartedRealtime = Time.realtimeSinceStartup;
+                    InfoBundleOptimizationBatch conversion = new InfoBundleOptimizationBatch(convertPaths, restore);
+                    _conversionBatch = conversion;
+                    if (_prioritizedNames.Count > 0)
                     {
-                        loaded++;
-                        DuplicateCommonDialog.RecordLoaded(file.Name, file.FullName);
+                        List<string> urgent = new List<string>();
+                        foreach (FileInfo file in toConvert)
+                            if (_prioritizedNames.Contains(file.Name)) urgent.Add(file.FullName);
+                        if (urgent.Count > 0) conversion.Prioritize(urgent);
                     }
-                    else failed++;
-                    // Failed files leave the wait list too: a corrupt dependency cannot be
-                    // fixed by waiting, and the recipe validation reports it precisely.
-                    MarkSettled(file.Name);
-                    FastInitPlugin.Log.LogInfo("shared bundle settled [" + file.Name + "]: "
-                        + (int)((Time.realtimeSinceStartup - started) * 1000) + " ms, loaded=" + (bundle != null));
+                    FastInitPlugin.Log.LogInfo("shared dependency bundle " + (restore ? "restoration" : "LZ4HC optimization")
+                        + " started: " + toConvert.Count + " file(s) (" + readyNow.Count + " already fast)");
+                    conversion.Start();
                 }
-                if (remaining == 0) break;
-                if (Time.realtimeSinceStartup >= nextNotice)
+
+                float nextNotice = started + 15f;
+                while (remaining > 0 || _convertingNames.Count > 0)
                 {
-                    FastInitPlugin.Log.LogWarning("shared dependency bundles still pending after "
-                        + (int)(Time.realtimeSinceStartup - started) + "s (" + remaining + " left); waiting without duplicate requests");
-                    nextNotice += 15f;
+                    InfoBundleOptimizationBatch conversion = _conversionBatch;
+                    if (conversion != null)
+                    {
+                        conversion.Drain(delegate(string message) { FastInitPlugin.Log.LogInfo(message); });
+                        string settledPath;
+                        InfoBundleOptimizer.Result settledResult;
+                        while (conversion.TryDequeueSettled(out settledPath, out settledResult))
+                        {
+                            FileInfo convertedFile;
+                            if (!convertingByPath.TryGetValue(settledPath, out convertedFile)) continue;
+                            convertingByPath.Remove(settledPath);
+                            _convertingNames.Remove(convertedFile.Name);
+                            if (settledResult == InfoBundleOptimizer.Result.Replaced
+                                || settledResult == InfoBundleOptimizer.Result.Restored)
+                                anyReplaced = true;
+                            if (!_shutdown)
+                                DispatchSharedLoad(convertedFile, pending, requests, reaped, ref remaining, ref skipped);
+                        }
+                        if (conversion.Done)
+                        {
+                            conversion.Drain(delegate(string message) { FastInitPlugin.Log.LogInfo(message); });
+                            conversion.Dispose();
+                            if (ReferenceEquals(_conversionBatch, conversion)) _conversionBatch = null;
+                            if (convertingByPath.Count > 0)
+                            {
+                                foreach (FileInfo leftover in convertingByPath.Values)
+                                {
+                                    _convertingNames.Remove(leftover.Name);
+                                    if (!_shutdown)
+                                        DispatchSharedLoad(leftover, pending, requests, reaped, ref remaining, ref skipped);
+                                }
+                                convertingByPath.Clear();
+                            }
+                            _convertingNames.Clear();
+                            if (anyReplaced)
+                            {
+                                ThumbnailCache.Invalidate();
+                                FastInitPlugin.Log.LogInfo("shared dependency bundle optimization updated source files; thumbnail stamp invalidated");
+                            }
+                        }
+                    }
+
+                    for (int i = 0; i < requests.Count; i++)
+                    {
+                        if (reaped[i] || !requests[i].isDone) continue;
+                        reaped[i] = true;
+                        remaining--;
+                        FileInfo file = pending[i];
+                        _takeoverLoads.Remove(file.Name);
+                        AssetBundle bundle = requests[i].assetBundle;
+                        if (bundle == null)
+                        {
+                            // Completed failed requests can safely fall back to a sync load.
+                            try { bundle = AssetBundle.LoadFromFile(file.FullName); }
+                            catch (Exception e) { FastInitPlugin.Log.LogWarning("shared bundle sync retry failed [" + file.Name + "]: " + e.Message); }
+                        }
+                        if (bundle != null)
+                        {
+                            loaded++;
+                            DuplicateCommonDialog.RecordLoaded(file.Name, file.FullName);
+                        }
+                        else failed++;
+                        // Failed files leave the wait list too: a corrupt dependency cannot be
+                        // fixed by waiting, and the recipe validation reports it precisely.
+                        MarkSettled(file.Name);
+                        FastInitPlugin.Log.LogInfo("shared bundle settled [" + file.Name + "]: "
+                            + (int)((Time.realtimeSinceStartup - started) * 1000) + " ms, loaded=" + (bundle != null));
+                    }
+                    if (remaining == 0 && _convertingNames.Count == 0) break;
+                    if (Time.realtimeSinceStartup >= nextNotice)
+                    {
+                        FastInitPlugin.Log.LogWarning("shared dependency bundles still pending after "
+                            + (int)(Time.realtimeSinceStartup - started) + "s (" + remaining + " loading, "
+                            + _convertingNames.Count + " optimizing); waiting without duplicate requests");
+                        nextNotice += 15f;
+                    }
+                    yield return null;
                 }
-                yield return null;
             }
-            _drained = true;
+            finally
+            {
+                InfoBundleOptimizationBatch conversion = _conversionBatch;
+                if (conversion != null)
+                {
+                    conversion.Drain(delegate(string message) { FastInitPlugin.Log.LogInfo(message); });
+                    conversion.Dispose();
+                    if (ReferenceEquals(_conversionBatch, conversion)) _conversionBatch = null;
+                }
+                _convertingNames.Clear();
+                _drained = true;
+            }
             FastInitPlugin.Log.LogInfo("shared dependency bundles: " + loaded + " loaded, " + skipped + " skipped (dup), "
                 + failed + " failed (" + (int)((Time.realtimeSinceStartup - started) * 1000) + " ms)");
+        }
+
+        private static void DispatchSharedLoad(FileInfo file, List<FileInfo> pending, List<AssetBundleCreateRequest> requests,
+            List<bool> reaped, ref int remaining, ref int skipped)
+        {
+            if (IsResident(file.Name))
+            {
+                skipped++;
+                MarkSettled(file.Name);
+                DuplicateCommonDialog.RecordDuplicate(file.Name, file.FullName);
+                FastInitPlugin.Log.LogInfo("skip " + file.Name + ": already loaded by another plugin");
+                return;
+            }
+            if (_healLoads.ContainsKey(file.Name)) return;
+            AssetBundleCreateRequest extRequest;
+            string extPath;
+            if (DuplicateCommonDialog.TryGetPendingLoad(file.Name, out extRequest, out extPath))
+            {
+                skipped++;
+                DuplicateCommonDialog.RecordDuplicate(file.Name, file.FullName, extPath);
+                FastInitPlugin.Log.LogInfo("skip " + file.Name + ": already loading by another plugin");
+                return;
+            }
+            AssetBundleCreateRequest request;
+            try { request = AssetBundle.LoadFromFileAsync(file.FullName); }
+            catch (Exception e)
+            {
+                FastInitPlugin.Log.LogWarning("shared bundle request failed [" + file.Name + "]: " + e.Message);
+                request = null;
+            }
+            if (request == null)
+            {
+                MarkSettled(file.Name);
+                return;
+            }
+            if (_prioritizedNames.Contains(file.Name)) request.priority = 100;
+            _takeoverLoads[file.Name] = request;
+            requests.Add(request);
+            pending.Add(file);
+            reaped.Add(false);
+            remaining++;
+        }
+
+        private static bool FileNeedsSharedWork(string path, bool restore)
+        {
+            try
+            {
+                string dir = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(dir) && Directory.Exists(Path.Combine(dir, ".diylevel-fastinit")))
+                    return true;
+                if (restore) return false;
+                return BundleCodecs.UnityFsRepacker.NeedsConversion(path);
+            }
+            catch { return false; }
+        }
+
+        private static int CompareByLengthThenName(FileInfo a, FileInfo b)
+        {
+            long la = 0, lb = 0;
+            try { la = a.Length; } catch { }
+            try { lb = b.Length; } catch { }
+            int cmp = la.CompareTo(lb);
+            return cmp != 0 ? cmp : string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static IEnumerator PreIndexSharedBundles(string diyPluginDir)
+        {
+            if (_cabsIndexed) yield break;
+            CollectNames();
+            List<string> toIndex = new List<string>();
+            if (_loaderDir != null)
+                foreach (string name in _names) toIndex.Add(Path.Combine(_loaderDir, name));
+            if (!string.IsNullOrEmpty(diyPluginDir))
+                foreach (FileInfo file in FastInitHost.SafeGetFiles(new DirectoryInfo(diyPluginDir), "common*"))
+                    if (!string.Equals(file.Name, "common", StringComparison.OrdinalIgnoreCase))
+                        toIndex.Add(file.FullName);
+
+            System.Diagnostics.Stopwatch slice = System.Diagnostics.Stopwatch.StartNew();
+            for (int i = 0; i < toIndex.Count; i++)
+            {
+                if (_shutdown) yield break;
+                IndexCabinets(toIndex[i]);
+                if (slice.Elapsed.TotalMilliseconds >= 4)
+                {
+                    yield return null;
+                    slice.Reset();
+                    slice.Start();
+                }
+            }
+            _cabsIndexed = true;
         }
 
         // No fixed order: every request is issued in the same frame, so all packs load
@@ -414,7 +648,10 @@ namespace DIYLevelFastInit
                 while (queue.Count != 0)
                 {
                     string current = queue.Dequeue();
-                    foreach (string cabinet in InfoBundleGraph.BundleReferences(current))
+                    string[] references;
+                    if (!_sharedBundleRefs.TryGetValue(current, out references))
+                        references = InfoBundleGraph.BundleReferences(current);
+                    foreach (string cabinet in references)
                     {
                         string target;
                         if (cabinet == null || !_cabBundles.TryGetValue(cabinet, out target)) continue;
@@ -458,34 +695,34 @@ namespace DIYLevelFastInit
             return paths;
         }
 
-        // Reads each dependency bundle's directory once. WLoader packs are indexed first so
-        // cross-directory duplicates attribute to WLoader's authoritative copy.
+        // Reads each dependency bundle's directory and outgoing CAB references once.
+        // WLoader packs are indexed first so cross-directory duplicates attribute to
+        // WLoader's authoritative copy.
         private static bool IndexBundleCabinets()
         {
             if (_cabsIndexed) return _cabBundles.Count != 0;
             _cabsIndexed = true;
-            HashSet<string> indexedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            HashSet<string> indexedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             CollectNames();
             if (_loaderDir != null)
-                foreach (string name in _names) IndexCabinets(Path.Combine(_loaderDir, name), indexedPaths, indexedNames);
+                foreach (string name in _names) IndexCabinets(Path.Combine(_loaderDir, name));
             string diy = FastInitPlugin.GetDiyPluginDir();
             if (!string.IsNullOrEmpty(diy))
                 foreach (FileInfo file in FastInitHost.SafeGetFiles(new DirectoryInfo(diy), "common*"))
                     if (!string.Equals(file.Name, "common", StringComparison.OrdinalIgnoreCase))
-                        IndexCabinets(file.FullName, indexedPaths, indexedNames);
+                        IndexCabinets(file.FullName);
             return _cabBundles.Count != 0;
         }
 
-        private static void IndexCabinets(string path, HashSet<string> indexedPaths, HashSet<string> indexedNames)
+        private static void IndexCabinets(string path)
         {
             string normalized = NormalizePath(path);
             string name = Path.GetFileName(normalized);
-            if (!indexedPaths.Add(normalized) || !indexedNames.Add(name)) return;
+            if (!_indexedPaths.Add(normalized) || !_indexedNames.Add(name)) return;
             try
             {
                 foreach (string cabinet in InfoBundleGraph.CabinetNames(normalized))
                     if (!_cabBundles.ContainsKey(cabinet)) _cabBundles[cabinet] = normalized;
+                _sharedBundleRefs[normalized] = InfoBundleGraph.BundleReferences(normalized);
             }
             catch (Exception e)
             {
@@ -499,14 +736,19 @@ namespace DIYLevelFastInit
             return bundles == null || bundles.Count == 0 || Settled(bundles);
         }
 
-        // Synchronous fallback entry path: joins any in-flight async request for each
-        // needed shared bundle without starting a duplicate load, or loads missing ones.
+        // Synchronous fallback entry path: waits for any in-flight conversion of a needed
+        // file before joining its async load or loading synchronously.
         internal static void EnsureBundlesSync(HashSet<string> bundles)
         {
             if (bundles == null || bundles.Count == 0) return;
+            InfoBundleOptimizationBatch conversion = _conversionBatch;
+            if (conversion != null && !conversion.Done) conversion.Prioritize(bundles);
             foreach (string path in bundles)
             {
                 string name = Path.GetFileName(path);
+                if (IsSettled(name)) continue;
+                if (conversion != null && conversion.IsPending(path))
+                    conversion.WaitUntilSettled(path);
                 if (IsSettled(name)) continue;
                 AssetBundle bundle = null;
                 AssetBundleCreateRequest request;
@@ -558,6 +800,7 @@ namespace DIYLevelFastInit
             float timeout = FastInitPlugin.WLoaderGateTimeoutSeconds;
             int settled = SettledCount(bundles);
             float fraction = PendingFraction(bundles);
+            float conversionWork = _conversionBatch != null ? _conversionBatch.OverallWorkUnits : 0f;
             float lastProgress = start;
             if (progress != null) progress(settled, fraction);
             while (!Settled(bundles))
@@ -566,18 +809,27 @@ namespace DIYLevelFastInit
                 ReapHealLoads(bundles);
                 int nowSettled = SettledCount(bundles);
                 float nowFraction = PendingFraction(bundles);
+                bool convertingNeeded = AnyConverting(bundles);
+                float nowConversionWork = convertingNeeded && _conversionBatch != null ? _conversionBatch.OverallWorkUnits : conversionWork;
                 // A long decode still reports a rising request progress, so a cold disk
-                // is not mistaken for a stalled load.
-                if (nowSettled != settled || nowFraction > fraction + 0.01f)
+                // is not mistaken for a stalled load; likewise active conversion progress
+                // in the shared batch keeps the stall timer alive while queued files wait.
+                if (nowSettled != settled || nowFraction > fraction + 0.01f || nowConversionWork > conversionWork + 0.01f)
                 {
+                    bool uiChanged = nowSettled != settled || nowFraction > fraction + 0.01f;
                     settled = nowSettled;
                     fraction = nowFraction;
+                    conversionWork = nowConversionWork;
                     lastProgress = Time.realtimeSinceStartup;
-                    if (progress != null) progress(settled, fraction);
+                    if (uiChanged && progress != null) progress(settled, fraction);
                 }
-                if (Time.realtimeSinceStartup - start >= timeout)
+                // First-launch LZ4HC conversion of heavy commonW* packs can legitimately run
+                // longer than the default 60s load timeout on slower CPUs; allow up to 300s
+                // while needed bundles are actively converting (no-progress stalls still trip at 20s).
+                float effectiveTimeout = convertingNeeded ? Math.Max(timeout, 300f) : timeout;
+                if (Time.realtimeSinceStartup - start >= effectiveTimeout)
                 {
-                    FastInitPlugin.Log.LogWarning("dependency bundle wait timed out after " + (int)timeout
+                    FastInitPlugin.Log.LogWarning("dependency bundle wait timed out after " + (int)effectiveTimeout
                         + "s (" + settled + "/" + bundles.Count + " ready at " + Percent(fraction) + "); giving way");
                     yield break;
                 }
@@ -609,6 +861,7 @@ namespace DIYLevelFastInit
             foreach (string path in bundles)
             {
                 string name = Path.GetFileName(path);
+                _prioritizedNames.Add(name);
                 if (Boost(_takeoverLoads, name) || Boost(_healLoads, name))
                 {
                     boosted++;
@@ -622,7 +875,25 @@ namespace DIYLevelFastInit
                     boosted++;
                 }
             }
+            InfoBundleOptimizationBatch conversion = _conversionBatch;
+            if (conversion != null && !conversion.Done)
+                boosted += conversion.Prioritize(bundles);
             return boosted;
+        }
+
+        private static bool IsConverting(string name, string path)
+        {
+            if (_convertingNames.Contains(name)) return true;
+            InfoBundleOptimizationBatch conversion = _conversionBatch;
+            return conversion != null && conversion.IsPending(path);
+        }
+
+        private static bool AnyConverting(HashSet<string> bundles)
+        {
+            if (bundles == null) return false;
+            foreach (string path in bundles)
+                if (IsConverting(Path.GetFileName(path), path)) return true;
+            return false;
         }
 
         private static bool Boost(Dictionary<string, AssetBundleCreateRequest> loads, string name)
@@ -643,7 +914,8 @@ namespace DIYLevelFastInit
                 string name = Path.GetFileName(path);
                 AssetBundleCreateRequest extRequest;
                 string extPath;
-                if (IsSettled(name) || _takeoverLoads.ContainsKey(name) || _healLoads.ContainsKey(name)
+                if (IsSettled(name) || IsConverting(name, path)
+                    || _takeoverLoads.ContainsKey(name) || _healLoads.ContainsKey(name)
                     || DuplicateCommonDialog.TryGetPendingLoad(name, out extRequest, out extPath)) continue;
                 try
                 {
@@ -678,14 +950,22 @@ namespace DIYLevelFastInit
             }
         }
 
-        // Average progress of the needed bundles that are still loading; 0 when none are.
+        // Average progress of the needed bundles that are still converting or loading; 0 when none are.
         private static float PendingFraction(HashSet<string> bundles)
         {
             float sum = 0f;
             int count = 0;
+            InfoBundleOptimizationBatch conversion = _conversionBatch;
             foreach (string path in bundles)
             {
                 string name = Path.GetFileName(path);
+                if (IsSettled(name)) continue;
+                if (IsConverting(name, path))
+                {
+                    sum += (conversion != null ? conversion.GetProgress(path) : 0f) * 0.95f;
+                    count++;
+                    continue;
+                }
                 if (AddFraction(_takeoverLoads, name, ref sum, ref count)) continue;
                 if (AddFraction(_healLoads, name, ref sum, ref count)) continue;
                 AssetBundleCreateRequest extRequest;
@@ -745,7 +1025,9 @@ namespace DIYLevelFastInit
 
         internal static string StateDescription()
         {
-            string shared = (_drained ? "settled" : "pending") + " (" + _settled.Count + "/" + _expectedCount + " files)";
+            InfoBundleOptimizationBatch conversion = _conversionBatch;
+            string shared = (_drained ? "settled" : "pending") + " (" + _settled.Count + "/" + _expectedCount + " files"
+                + (conversion != null && !conversion.Done ? ", optimizing " + conversion.Completed + "/" + conversion.Total : "") + ")";
             if (_mode == Mode.Observe)
                 return shared + "; WLoader observing " + ResidentCount() + "/" + _names.Count + " resident";
             return shared;

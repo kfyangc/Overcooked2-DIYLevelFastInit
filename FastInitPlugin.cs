@@ -81,6 +81,9 @@ namespace DIYLevelFastInit
         // Standalone blocker present: FastInit core keeps running, only the integrated
         // failure hooks stay disabled while the uninstall dialog is pending.
         private PluginConflictDialog _blockerConflict;
+        // Convert LZMA-compressed shared common* / commonW* bundles to 128 KiB LZ4HC
+        // in place before loading them so Unity reads only referenced chunks on demand.
+        internal static bool OptimizeSharedCommonBundlesOnStartup = true;
 
         private void Awake()
         {
@@ -154,6 +157,7 @@ namespace DIYLevelFastInit
             if (_directoryPoller != null) _directoryPoller.Dispose();
             if (_resourceFailureBlocker != null) _resourceFailureBlocker.Dispose();
             if (_infoOptimization != null) _infoOptimization.Dispose();
+            WLoaderInterop.Shutdown();
             if (_catalogRead != null) _catalogRead.Dispose();
             OnDemandResources.ResetSaveSelection();
             ClientLoadGate.Cancel("plugin shutdown");

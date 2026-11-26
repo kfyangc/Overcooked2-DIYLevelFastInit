@@ -40,6 +40,11 @@ namespace DIYLevelFastInit
 
         internal static Result Optimize(string source, Func<bool> cancelled, Action<string> log, out long preparedLength, out long preparedModified, BundleWorkScheduler scheduler, UnityFsRepacker.WorkPlan plan)
         {
+            return Optimize(source, cancelled, log, out preparedLength, out preparedModified, scheduler, plan, null);
+        }
+
+        internal static Result Optimize(string source, Func<bool> cancelled, Action<string> log, out long preparedLength, out long preparedModified, BundleWorkScheduler scheduler, UnityFsRepacker.WorkPlan plan, Action<float> progress)
+        {
             preparedLength = preparedModified = 0;
             string converted = null, recordTemporary = null;
             try
@@ -99,8 +104,9 @@ namespace DIYLevelFastInit
                     long length = stamp.Length, ticks = stamp.LastWriteTimeUtc.Ticks;
                     Log(log, "level bundle optimization started: " + source);
                     converted = Unique(directory, "converted-", ".tmp");
-                    UnityFsRepacker.ConversionResult result = UnityFsRepacker.Convert(source, converted, cancelled, null, scheduler, plan);
-                    UnityFsRepacker.ValidateConverted(source, converted, result, cancelled);
+                    UnityFsRepacker.ConversionResult result = UnityFsRepacker.Convert(source, converted, cancelled, null, scheduler, plan, progress);
+                    UnityFsRepacker.ValidateConverted(source, converted, result, cancelled, progress);
+                    if (progress != null) try { progress(0.98f); } catch (Exception) { }
                     CheckCancelled(cancelled);
                     if (result == null || result.SourceLength != length || !ValidHash(result.SourceHash) || !ValidHash(result.OutputHash))
                         throw new IOException("Converted source fingerprint does not match the preparation snapshot");

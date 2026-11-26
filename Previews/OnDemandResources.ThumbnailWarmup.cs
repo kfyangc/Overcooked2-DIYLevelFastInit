@@ -22,8 +22,8 @@ namespace DIYLevelFastInit
 
         private static bool WarmupPaused()
         {
-            return FastInitPlugin.Loading || FastInitPlugin.Syncing || IsTransitioning
-                || PseudoPrefabManager.isInCustomLevel || _previewLoading;
+            return FastInitPlugin.Loading || FastInitPlugin.Syncing || WLoaderInterop.IsConvertingSharedBundles
+                || IsTransitioning || PseudoPrefabManager.isInCustomLevel || _previewLoading;
         }
 
         private static IEnumerator WarmThumbnails()
