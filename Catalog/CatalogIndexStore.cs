@@ -244,12 +244,27 @@ namespace DIYLevelFastInit
 
         internal void PruneMissingDirectories(HashSet<string> existingNormalizedDirs)
         {
+            PruneMissingDirectories(null, existingNormalizedDirs);
+        }
+
+        // When parentDir is provided, only direct children of parentDir are pruned so
+        // fast-bundle stamps stored for shared common* directories outside levels/ survive.
+        internal void PruneMissingDirectories(string parentDir, HashSet<string> existingNormalizedDirs)
+        {
             if (existingNormalizedDirs == null) return;
+            string normalizedParent = string.IsNullOrEmpty(parentDir) ? null : NormalizeDir(parentDir);
             lock (_sync)
             {
                 List<string> stale = null;
                 foreach (string key in _entries.Keys)
                 {
+                    if (normalizedParent != null)
+                    {
+                        string parent;
+                        try { parent = NormalizeDir(Path.GetDirectoryName(key)); }
+                        catch { parent = string.Empty; }
+                        if (!string.Equals(parent, normalizedParent, StringComparison.OrdinalIgnoreCase)) continue;
+                    }
                     if (!existingNormalizedDirs.Contains(key))
                     {
                         if (stale == null) stale = new List<string>();

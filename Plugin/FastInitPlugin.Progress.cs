@@ -21,10 +21,16 @@ namespace DIYLevelFastInit
             {
                 infoPreparing = null;
             }
+            string commonPreparing = QuietDirectoryRefresh ? null : WLoaderInterop.OptimizationProgress;
+            if (commonPreparing != null
+                && Time.realtimeSinceStartup - WLoaderInterop.ConversionStartedRealtime < InfoProgressDelaySeconds)
+            {
+                commonPreparing = null;
+            }
             string levelLoading = OnDemandResources.LevelLoadProgress;
             bool thumbnails = !QuietDirectoryRefresh && OnDemandResources.WarmingThumbnails
                 && !OnDemandResources.IsTransitioning && !PseudoPrefabManager.isInCustomLevel;
-            if (!catalogLoading && !thumbnails && levelLoading == null && infoPreparing == null)
+            if (!catalogLoading && !thumbnails && levelLoading == null && infoPreparing == null && commonPreparing == null)
             {
                 return;
             }
@@ -43,6 +49,7 @@ namespace DIYLevelFastInit
                 string text = levelLoading != null ? "DIY level preparing " + levelLoading
                     : infoPreparing != null ? "DIY info " + infoPreparing
                     : catalogLoading ? (Syncing ? "DIY levels refreshing" : "DIY levels loading " + done + "/" + TotalSets)
+                    : commonPreparing != null ? "DIY common " + commonPreparing
                     : "DIY previews caching " + OnDemandResources.ThumbnailDone + "/" + OnDemandResources.ThumbnailTotal;
                 Rect rect = new Rect(Screen.width - 336, 6, 330, 26);
                 // The label used to assume 330px was enough; longer states (entry dependency

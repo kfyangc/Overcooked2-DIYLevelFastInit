@@ -265,7 +265,8 @@ namespace DIYLevelFastInit
                         // Conversion is pure managed I/O with no Unity requests; keep it ahead of
                         // the transition wait so scene changes do not stall the pipeline.
                         // Pass 0 already-fast sets publish immediately without spinning up a batch;
-                        // only Pass 1 sets needing real conversion/restore run PrepareSetInfoFiles.
+                        // only Pass 1 sets needing real conversion/restore run PrepareSetInfoFiles
+                        // after shared common* conversion settles so only one memory-budgeted batch runs at once.
                         if (pass == 0)
                         {
                             if (convertFiles) FastInitPlugin.InfoOptimizationDone += scanned.BundlePaths.Count;
@@ -277,6 +278,7 @@ namespace DIYLevelFastInit
                             FlushPendingMenu(ref menuDirty, ref menuNeedsHeal, phase, timings);
                             if (convertFiles && scanned.BundlePaths.Count > 0)
                             {
+                                while (WLoaderInterop.IsConvertingSharedBundles) yield return null;
                                 double convertStarted = phase.Elapsed.TotalMilliseconds;
                                 yield return Guard(FastInitPlugin.PrepareSetInfoFiles(dir.FullName, scanned.BundlePaths), "info prepare " + dir.Name);
                                 preparationMs += phase.Elapsed.TotalMilliseconds - convertStarted;

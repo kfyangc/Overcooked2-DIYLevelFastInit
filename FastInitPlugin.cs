@@ -83,6 +83,9 @@ namespace DIYLevelFastInit
         private PluginConflictDialog _blockerConflict;
         internal static StartupCatalogScan _startupScan;
         internal static CatalogMetadataPool _catalogPool;
+        // Convert LZMA-compressed shared common* / commonW* bundles to 128 KiB LZ4HC
+        // in place before loading them so Unity reads only referenced chunks on demand.
+        internal static bool OptimizeSharedCommonBundlesOnStartup = true;
 
         private void Awake()
         {
@@ -156,6 +159,7 @@ namespace DIYLevelFastInit
             if (_directoryPoller != null) _directoryPoller.Dispose();
             if (_resourceFailureBlocker != null) _resourceFailureBlocker.Dispose();
             if (_infoOptimization != null) _infoOptimization.Dispose();
+            WLoaderInterop.Shutdown();
             if (_catalogRead != null) _catalogRead.Dispose();
             if (_catalogPool != null) _catalogPool.Dispose();
             if (_startupScan != null) _startupScan.Dispose();

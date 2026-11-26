@@ -232,10 +232,20 @@ namespace DIYLevelFastInit.BundleCodecs
 
         internal static void ValidateConverted(string source, string output, ConversionResult result, Func<bool> cancelled)
         {
-            ValidateConverted(source, output, result, cancelled, true);
+            ValidateConverted(source, output, result, cancelled, true, null);
         }
 
         internal static void ValidateConverted(string source, string output, ConversionResult result, Func<bool> cancelled, bool verifySourceHash)
+        {
+            ValidateConverted(source, output, result, cancelled, verifySourceHash, null);
+        }
+
+        internal static void ValidateConverted(string source, string output, ConversionResult result, Func<bool> cancelled, Action<float> progress)
+        {
+            ValidateConverted(source, output, result, cancelled, true, progress);
+        }
+
+        internal static void ValidateConverted(string source, string output, ConversionResult result, Func<bool> cancelled, bool verifySourceHash, Action<float> progress)
         {
             if (result == null || result.SourceLength <= 0 || result.SourceLength > MaxBytes
                 || result.OutputLength <= 0 || result.OutputLength > MaxBytes || result.DataLength <= 0
@@ -264,6 +274,8 @@ namespace DIYLevelFastInit.BundleCodecs
                 // Hash the full output file and verify every decoded HC block in a single sequential pass.
                 byte[] packed = new byte[ChunkSize + ChunkSize / 255 + 16], plain = new byte[ChunkSize];
                 converted.Position = 0;
+                float lastReported = 0.85f;
+                ReportProgress(progress, lastReported);
                 using (SHA256 outputHash = SHA256.Create())
                 using (SHA256 dataHash = SHA256.Create())
                 {
@@ -280,6 +292,15 @@ namespace DIYLevelFastInit.BundleCodecs
                         outputHash.TransformBlock(packed, 0, count, packed, 0);
                         DecodeLz4(packed, count, plain, length, true);
                         dataHash.TransformBlock(plain, 0, length, plain, 0);
+                        if (progress != null)
+                        {
+                            float fraction = 0.85f + 0.12f * (i + 1) / after.Blocks.Count;
+                            if (fraction - lastReported >= 0.01f || i == after.Blocks.Count - 1)
+                            {
+                                lastReported = fraction;
+                                ReportProgress(progress, fraction);
+                            }
+                        }
                     }
                     long trailing = after.SourceLength - converted.Position;
                     if (trailing < 0) throw new IOException("Converted UnityFS file hash changed");
@@ -324,6 +345,11 @@ namespace DIYLevelFastInit.BundleCodecs
 
         internal static ConversionResult Convert(string source, string destination, Func<bool> cancelled, Action checkpoint, BundleWorkScheduler scheduler, WorkPlan plan)
         {
+            return Convert(source, destination, cancelled, checkpoint, scheduler, plan, null);
+        }
+
+        internal static ConversionResult Convert(string source, string destination, Func<bool> cancelled, Action checkpoint, BundleWorkScheduler scheduler, WorkPlan plan, Action<float> progress)
+        {
             if (string.Equals(Path.GetFullPath(source), Path.GetFullPath(destination), StringComparison.OrdinalIgnoreCase))
                 throw new IOException("The source bundle cannot be a conversion destination");
             Check(cancelled, checkpoint);
@@ -349,7 +375,7 @@ namespace DIYLevelFastInit.BundleCodecs
                     using (SHA256 hash = SHA256.Create())
                     {
                         bool parallel = scheduler != null && (plan == null ? layout.DataLength > ChunkSize : plan.Parallel);
-                        using (ChunkOutput sink = new ChunkOutput(output, layout.DataLength, hash, cancelled, checkpoint, parallel ? scheduler : null))
+                        using (ChunkOutput sink = new ChunkOutput(output, layout.DataLength, hash, cancelled, checkpoint, parallel ? scheduler : null, progress))
                         {
                             DecodeSource(input, layout, sink, cancelled, checkpoint);
                             sink.Finish();
@@ -661,6 +687,13 @@ namespace DIYLevelFastInit.BundleCodecs
             if (cancelled != null && cancelled()) throw new OperationCanceledException("Bundle conversion cancelled");
         }
 
+        private static void ReportProgress(Action<float> progress, float fraction)
+        {
+            if (progress == null) return;
+            try { progress(fraction); }
+            catch (Exception) { }
+        }
+
         private abstract class ForwardStream : Stream
         {
             public override bool CanRead { get { return false; } }
@@ -733,6 +766,7 @@ namespace DIYLevelFastInit.BundleCodecs
             private readonly SHA256 _hash;
             private readonly Func<bool> _cancelled;
             private readonly Action _checkpoint;
+            private readonly Action<float> _progress;
             private readonly byte[] _plain = new byte[ChunkSize], _packed = new byte[ChunkSize + ChunkSize / 255 + 16];
             private readonly Lz4BlockEncoder _encoder;
             private readonly BundleWorkScheduler _scheduler;
@@ -740,11 +774,12 @@ namespace DIYLevelFastInit.BundleCodecs
             private readonly Queue<PendingBlock> _available = new Queue<PendingBlock>();
             private long _written;
             private int _filled;
+            private float _lastReported = -1f;
             internal readonly List<Block> Blocks = new List<Block>();
-            internal ChunkOutput(Stream output, long limit, SHA256 hash, Func<bool> cancelled, Action checkpoint, BundleWorkScheduler scheduler)
+            internal ChunkOutput(Stream output, long limit, SHA256 hash, Func<bool> cancelled, Action checkpoint, BundleWorkScheduler scheduler, Action<float> progress)
             {
                 _output = output; _limit = limit; _hash = hash; _cancelled = cancelled; _checkpoint = checkpoint;
-                _scheduler = scheduler;
+                _scheduler = scheduler; _progress = progress;
                 if (scheduler == null) _encoder = new Lz4BlockEncoder();
             }
             public override bool CanWrite { get { return true; } }
@@ -766,10 +801,20 @@ namespace DIYLevelFastInit.BundleCodecs
                 if (_written != _limit) throw new IOException("Truncated decoded output");
                 if (_filled != 0) FlushBlock();
                 while (_pending.Count != 0) WritePending();
+                ReportProgress(_progress, 0.85f);
             }
             private void FlushBlock()
             {
                 Check(_cancelled, _checkpoint);
+                if (_progress != null && _limit > 0)
+                {
+                    float fraction = 0.85f * _written / _limit;
+                    if (fraction - _lastReported >= 0.01f)
+                    {
+                        _lastReported = fraction;
+                        ReportProgress(_progress, fraction);
+                    }
+                }
                 if (_scheduler != null)
                 {
                     PendingBlock block = _available.Count != 0 ? _available.Dequeue() : new PendingBlock

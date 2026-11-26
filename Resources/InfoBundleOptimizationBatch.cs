@@ -26,6 +26,12 @@ namespace DIYLevelFastInit
             internal string Message;
             internal bool Debug;
         }
+
+        internal sealed class SettledFile
+        {
+            internal string Path;
+            internal InfoBundleOptimizer.Result Result;
+        }
         internal static long MemoryBudgetBytes = 800L * 1024 * 1024;
         private readonly string[] _paths;
         private readonly bool _restore;
@@ -37,6 +43,8 @@ namespace DIYLevelFastInit
         private readonly List<string> _activePaths = new List<string>();
         private readonly List<FileWork> _files = new List<FileWork>();
         private readonly HashSet<string> _settled = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private readonly Queue<SettledFile> _settledQueue = new Queue<SettledFile>();
+        private readonly Dictionary<string, float> _fileProgress = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
         private Thread _worker;
         private volatile BundleWorkScheduler _scheduler;
         private volatile bool _cancelled, _done;
@@ -75,6 +83,51 @@ namespace DIYLevelFastInit
                 if (string.Equals(candidate, full, StringComparison.OrdinalIgnoreCase)) { mine = true; break; }
             if (!mine) return false;
             lock (_sync) return !_settled.Contains(full);
+        }
+
+        internal bool TryDequeueSettled(out string path, out InfoBundleOptimizer.Result result)
+        {
+            lock (_sync)
+            {
+                if (_settledQueue.Count != 0)
+                {
+                    SettledFile settled = _settledQueue.Dequeue();
+                    path = settled.Path;
+                    result = settled.Result;
+                    return true;
+                }
+            }
+            path = null;
+            result = InfoBundleOptimizer.Result.Failed;
+            return false;
+        }
+
+        // Monotonic batch-wide work counter (settled files + active file fractions) so
+        // callers waiting on the batch can display smooth progress and detect stalls.
+        internal float OverallWorkUnits
+        {
+            get
+            {
+                lock (_sync)
+                {
+                    float sum = _settled.Count;
+                    for (int i = 0; i < _activePaths.Count; i++)
+                    {
+                        float value;
+                        if (_fileProgress.TryGetValue(_activePaths[i], out value)) sum += value;
+                    }
+                    return sum;
+                }
+            }
+        }
+
+        // Synchronous fallback: wait until this batch finishes touching files on disk.
+        internal void WaitUntilDone()
+        {
+            lock (_sync)
+            {
+                while (!_done) Monitor.Wait(_sync);
+            }
         }
 
         internal int Completed { get { return Interlocked.CompareExchange(ref _completed, 0, 0); } }
@@ -131,7 +184,15 @@ namespace DIYLevelFastInit
                     catch (Exception error)
                     {
                         Interlocked.Increment(ref _failed); Interlocked.Increment(ref _completed);
-                        lock (_sync) _settled.Add(path); // never touched by this batch
+                        lock (_sync)
+                        {
+                            if (_settled.Add(path))
+                            {
+                                _fileProgress[path] = 1f;
+                                _settledQueue.Enqueue(new SettledFile { Path = path, Result = InfoBundleOptimizer.Result.Failed });
+                                Monitor.PulseAll(_sync);
+                            }
+                        }
                         Log("level bundle planning failed; original retained [" + path + "]: " + error);
                     }
                 }
@@ -164,7 +225,11 @@ namespace DIYLevelFastInit
                     + ": " + _replaced + " replaced, " + _ready + " already HC, " + _fast + " fast (raw/LZ4) kept, "
                     + _restored + " restored, " + _skipped + " skipped, " + _failed + " failed (" + _completed + "/"
                     + _paths.Length + ", " + StartupTimings.Ms(timer.Elapsed.TotalMilliseconds) + " ms)");
-                _done = true;
+                lock (_sync)
+                {
+                    _done = true;
+                    Monitor.PulseAll(_sync);
+                }
             }
         }
 
@@ -196,6 +261,7 @@ namespace DIYLevelFastInit
             string path = file.Path;
             System.Diagnostics.Stopwatch timer = System.Diagnostics.Stopwatch.StartNew();
             lock (_sync) _activePaths.Add(path);
+            InfoBundleOptimizer.Result fileResult = InfoBundleOptimizer.Result.Failed;
             try
             {
                 if (_cancelled) return;
@@ -203,7 +269,9 @@ namespace DIYLevelFastInit
                 long preparedLength = 0, preparedModified = 0;
                 InfoBundleOptimizer.Result result = _restore
                     ? InfoBundleOptimizer.Restore(path, () => _cancelled, Log)
-                    : InfoBundleOptimizer.Optimize(path, () => _cancelled, Log, out preparedLength, out preparedModified, _scheduler, file.Plan);
+                    : InfoBundleOptimizer.Optimize(path, () => _cancelled, Log, out preparedLength, out preparedModified, _scheduler, file.Plan,
+                        delegate(float fraction) { lock (_sync) _fileProgress[path] = fraction; });
+                fileResult = result;
                 if (preparedLength > 0 && (result == InfoBundleOptimizer.Result.Replaced
                     || result == InfoBundleOptimizer.Result.AlreadyOptimized
                     || result == InfoBundleOptimizer.Result.FastLayout))
@@ -237,7 +305,9 @@ namespace DIYLevelFastInit
                 lock (_sync)
                 {
                     _activePaths.Remove(path);
-                    _settled.Add(path); // this batch will not touch the file again
+                    _fileProgress[path] = 1f;
+                    if (_settled.Add(path))
+                        _settledQueue.Enqueue(new SettledFile { Path = path, Result = fileResult });
                     _inFlight--; _reserved -= file.Plan.ReservationBytes;
                     try { StartFiles(); }
                     finally { Monitor.PulseAll(_sync); }
