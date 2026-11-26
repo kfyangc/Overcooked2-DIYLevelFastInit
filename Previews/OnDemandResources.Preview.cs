@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using HarmonyLib;
@@ -31,7 +32,11 @@ namespace DIYLevelFastInit
             if (__0 == null) return true;
             if (level == null)
             {
-                if (_previewRequest != null && ReferenceEquals(_previewRequest.Image, __0)) _previewRequest = null;
+                if (_previewRequest != null && ReferenceEquals(_previewRequest.Image, __0))
+                {
+                    _previewRequest = null;
+                    CancelDirectCoverRequest();
+                }
                 ThumbnailCache.Hide(__0);
                 return true;
             }
@@ -43,6 +48,22 @@ namespace DIYLevelFastInit
             if (FastInitPlugin.InfoSetPreparing(path)) return false;
             if (_previewRequest != null && ReferenceEquals(_previewRequest.Image, __0)
                 && ReferenceEquals(_previewRequest.Level, level)) return false;
+
+            // Serve memory LRU hits synchronously on the same frame with zero I/O or flicker.
+            ThumbnailCache.Entry cached = ThumbnailCache.TryGetMemory(path, level.sceneName);
+            if (cached != null)
+            {
+                CancelDirectCoverRequest();
+                _previewRequest = new PreviewRequest { Image = __0, Level = level, Path = path, Started = true };
+                _previewPath = null;
+                _lastPreviewTime = Time.realtimeSinceStartup;
+                ThumbnailCache.Show(cached, __0);
+                ReleaseUnused();
+                FastInitPlugin.Log.LogInfo("thumbnail cache hit: " + level.sceneName + " (memory, 0 ms)");
+                return false;
+            }
+
+            CancelDirectCoverRequest();
             ThumbnailCache.Hide(__0);
             _previewRequest = new PreviewRequest { Image = __0, Level = level, Path = path };
             _previewPath = path;
@@ -66,18 +87,24 @@ namespace DIYLevelFastInit
             {
                 while (_previewRequest != null)
                 {
-                    yield return null;
                     PreviewRequest request = _previewRequest;
                     if (request == null) break;
                     if (!PreviewIsCurrent(request))
                     {
-                        _previewRequest = null;
+                        if (ReferenceEquals(_previewRequest, request)) _previewRequest = null;
                         break;
                     }
-                    if (request.Started) continue;
-                    if (_catalogBundles != null) continue;
+                    if (request.Started) break;
                     request.Started = true;
                     if (TryShowCachedPreview(request)) continue;
+
+                    Box<bool> handled = new Box<bool>();
+                    yield return FastInitHost.Guard(
+                        LoadDirectPreview(request, handled),
+                        "direct thumbnail " + Path.GetFileName(request.Path));
+                    if (handled.Value || !PreviewIsCurrent(request)) continue;
+
+                    // Rare fallback: LZMA/external-sprite/unsupported texture uses native async load.
                     _previewLoading = true;
                     try
                     {
@@ -94,15 +121,88 @@ namespace DIYLevelFastInit
             }
             finally
             {
+                CancelDirectCoverRequest();
                 _previewRunning = false;
                 _previewBundles = null;
                 ReleaseUnused();
             }
         }
 
+        private static IEnumerator LoadDirectPreview(PreviewRequest request, Box<bool> handled)
+        {
+            Stopwatch timer = Stopwatch.StartNew();
+            string infoPath = ResolveInfoPath(request.Path);
+            if (infoPath == null) yield break;
+
+            DirectCoverRequest direct = new DirectCoverRequest(infoPath, request.Level.sceneName);
+            _directCoverRequest = direct;
+            try
+            {
+                direct.Start();
+                while (!direct.Done && PreviewIsCurrent(request)) yield return null;
+                if (!PreviewIsCurrent(request))
+                {
+                    direct.Dispose();
+                    yield break;
+                }
+
+                DirectCoverData result = direct.Result;
+                if (result == null) yield break;
+
+                if (result.Status == DirectCoverStatus.Ok || result.Status == DirectCoverStatus.NoScreenshot)
+                {
+                    double uploadStart = timer.Elapsed.TotalMilliseconds;
+                    ThumbnailCache.Entry entry = null;
+                    try { entry = ThumbnailCache.StoreDirect(request.Path, request.Level.sceneName, result); }
+                    catch (Exception e)
+                    {
+                        FastInitPlugin.Log.LogWarning("thumbnail direct upload failed [" + request.Level.sceneName + "]: " + e.Message);
+                    }
+                    if (entry != null)
+                    {
+                        double uploadMs = timer.Elapsed.TotalMilliseconds - uploadStart;
+                        ThumbnailCache.Show(entry, request.Image);
+                        _previewPath = null;
+                        handled.Value = true;
+                        if (result.Status == DirectCoverStatus.NoScreenshot)
+                        {
+                            FastInitPlugin.Log.LogInfo("thumbnail ready: " + request.Level.sceneName
+                                + " (direct, no screenshot, " + StartupTimings.Ms(timer.Elapsed.TotalMilliseconds) + " ms)");
+                        }
+                        else
+                        {
+                            FastInitPlugin.Log.LogInfo("thumbnail ready: " + request.Level.sceneName
+                                + " (direct, " + StartupTimings.Ms(timer.Elapsed.TotalMilliseconds) + " ms; index="
+                                + StartupTimings.Ms(result.IndexMs) + ", read=" + StartupTimings.Ms(result.ReadMs)
+                                + ", resize=" + StartupTimings.Ms(result.ResizeMs) + ", upload=" + StartupTimings.Ms(uploadMs) + ")");
+                        }
+                        yield break;
+                    }
+                }
+                else if (result.Status == DirectCoverStatus.Fallback)
+                {
+                    FastInitPlugin.Log.LogInfo("thumbnail direct fallback [" + request.Level.sceneName + "]: " + result.FallbackReason);
+                }
+            }
+            finally
+            {
+                direct.Dispose();
+                if (ReferenceEquals(_directCoverRequest, direct)) _directCoverRequest = null;
+            }
+        }
+
+        private static string ResolveInfoPath(string setPath)
+        {
+            SetSnapshot snap;
+            if (FastInitPlugin.Snapshots.TryGetValue(setPath, out snap) && snap != null && snap.InfoFileName != null)
+                return Path.Combine(setPath, snap.InfoFileName);
+            List<FileInfo> files = FastInitHost.SafeGetFiles(new DirectoryInfo(setPath), "info*");
+            return files.Count > 0 ? files[0].FullName : null;
+        }
+
         private static IEnumerator LoadPreview(PreviewRequest request)
         {
-            System.Diagnostics.Stopwatch timer = System.Diagnostics.Stopwatch.StartNew();
+            Stopwatch timer = Stopwatch.StartNew();
             Box<LevelInfoSO> full = new Box<LevelInfoSO>();
             try
             {
@@ -143,31 +243,44 @@ namespace DIYLevelFastInit
             }
         }
 
+        private static void CancelDirectCoverRequest()
+        {
+            DirectCoverRequest request = _directCoverRequest;
+            _directCoverRequest = null;
+            if (request != null) request.Dispose();
+        }
+
         private static void CancelPreview()
         {
+            CancelDirectCoverRequest();
             _previewRequest = null;
             _previewPath = null;
             ThumbnailCache.Hide(null);
         }
 
+        internal static void ShutdownPreviews()
+        {
+            CancelPreview();
+            ThumbnailCache.ClearMemory();
+            DirectCoverReader.ClearCache();
+        }
+
         private static bool TryShowCachedPreview(PreviewRequest request)
         {
             if (!PreviewIsCurrent(request)) return false;
-            System.Diagnostics.Stopwatch timer = System.Diagnostics.Stopwatch.StartNew();
             bool memoryHit;
             ThumbnailCache.Entry cached = ThumbnailCache.TryGet(request.Path, request.Level.sceneName, out memoryHit);
             if (cached == null) return false;
             ThumbnailCache.Show(cached, request.Image);
             _previewPath = null;
             ReleaseUnused();
-            FastInitPlugin.Log.LogInfo("thumbnail cache hit: " + request.Level.sceneName + " ("
-                + (memoryHit ? "memory" : "disk") + ", " + timer.ElapsedMilliseconds + " ms)");
+            FastInitPlugin.Log.LogInfo("thumbnail cache hit: " + request.Level.sceneName + " (memory, 0 ms)");
             return true;
         }
 
         internal static IEnumerator WaitForPreview()
         {
-            while (_previewRunning || _warmRunning) yield return null;
+            while (_previewRunning || _warmRunning || DirectCoverReader.ActiveReads > 0) yield return null;
         }
 
         private static bool FindCatalogLevel(LevelInfoSO level, out string path)

@@ -172,10 +172,10 @@ namespace DIYLevelFastInit
         private sealed class BlockReader : IDisposable
         {
             private readonly FileStream _stream;
-            private readonly BinaryReader _reader;
             private readonly BlockInfo[] _blocks;
             private readonly long[] _starts;
             private readonly Func<bool> _cancelled;
+            private byte[] _packedBuf;
             private byte[] _decoded;
             private int _decodedIndex = -1;
 
@@ -185,7 +185,6 @@ namespace DIYLevelFastInit
                 _starts = starts;
                 _cancelled = cancelled;
                 _stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 65536);
-                _reader = new BinaryReader(_stream);
             }
 
             internal void CheckCancelled()
@@ -211,9 +210,7 @@ namespace DIYLevelFastInit
                     BlockInfo block = _blocks[index];
                     if (_decodedIndex != index)
                     {
-                        _decoded = null;
-                        _stream.Position = block.Offset;
-                        _decoded = InfoBundleGraph.Decode(_reader, block.Packed, block.Size, block.Compression, block.Size);
+                        DecodeBlockIntoBuffer(block);
                         _decodedIndex = index;
                     }
                     int from = checked((int)(position - _starts[index]));
@@ -227,10 +224,93 @@ namespace DIYLevelFastInit
                 return result;
             }
 
+            private void DecodeBlockIntoBuffer(BlockInfo block)
+            {
+                if (_decoded == null || _decoded.Length < block.Size)
+                    _decoded = new byte[block.Size];
+                _stream.Position = block.Offset;
+                if (block.Compression == 0)
+                {
+                    ReadExact(_stream, _decoded, block.Size);
+                    return;
+                }
+                if (_packedBuf == null || _packedBuf.Length < block.Packed)
+                    _packedBuf = new byte[block.Packed];
+                ReadExact(_stream, _packedBuf, block.Packed);
+                DecodeLz4Into(_packedBuf, block.Packed, _decoded, block.Size);
+            }
+
+            private static void ReadExact(Stream stream, byte[] buffer, int count)
+            {
+                int readTotal = 0;
+                while (readTotal < count)
+                {
+                    int n = stream.Read(buffer, readTotal, count - readTotal);
+                    if (n <= 0) throw new IOException("Truncated UnityFS data");
+                    readTotal += n;
+                }
+            }
+
+            private static void DecodeLz4Into(byte[] input, int inputLen, byte[] output, int outputLen)
+            {
+                int src = 0;
+                int dst = 0;
+                while (dst < outputLen)
+                {
+                    if (src >= inputLen) throw new IOException("Truncated LZ4 block");
+                    int token = input[src++];
+                    int literal = token >> 4;
+                    if (literal == 15) literal += ReadLz4ExtLen(input, inputLen, ref src);
+                    if (literal > inputLen - src) throw new IOException("Invalid LZ4 literal");
+                    int litCopy = Math.Min(literal, outputLen - dst);
+                    if (litCopy > 0)
+                    {
+                        Buffer.BlockCopy(input, src, output, dst, litCopy);
+                        dst += litCopy;
+                    }
+                    src += literal;
+                    if (dst == outputLen) break;
+                    if (src > inputLen - 2) throw new IOException("Invalid LZ4 offset");
+                    int distance = input[src] | (input[src + 1] << 8);
+                    src += 2;
+                    if (distance == 0 || distance > dst) throw new IOException("Invalid LZ4 distance");
+                    int match = (token & 15) + 4;
+                    if ((token & 15) == 15) match += ReadLz4ExtLen(input, inputLen, ref src);
+                    int copyLen = Math.Min(match, outputLen - dst);
+                    if (distance >= copyLen && copyLen >= 8)
+                    {
+                        Buffer.BlockCopy(output, dst - distance, output, dst, copyLen);
+                        dst += copyLen;
+                    }
+                    else
+                    {
+                        int until = dst + copyLen;
+                        while (dst < until)
+                        {
+                            output[dst] = output[dst - distance];
+                            dst++;
+                        }
+                    }
+                }
+            }
+
+            private static int ReadLz4ExtLen(byte[] input, int inputLen, ref int index)
+            {
+                int total = 0;
+                int val;
+                do
+                {
+                    if (index >= inputLen || total > MaxBlockSize) throw new IOException("Invalid LZ4 length");
+                    val = input[index++];
+                    total += val;
+                } while (val == 255);
+                return total;
+            }
+
             public void Dispose()
             {
+                _packedBuf = null;
                 _decoded = null;
-                _reader.Close();
                 _stream.Dispose();
             }
         }

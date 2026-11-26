@@ -159,6 +159,7 @@ namespace DIYLevelFastInit
             if (_catalogRead != null) _catalogRead.Dispose();
             if (_catalogPool != null) _catalogPool.Dispose();
             if (_startupScan != null) _startupScan.Dispose();
+            OnDemandResources.ShutdownPreviews();
             OnDemandResources.ResetSaveSelection();
             ClientLoadGate.Cancel("plugin shutdown");
             OnDemandResources.CancelServerPreparation("plugin shutdown");
