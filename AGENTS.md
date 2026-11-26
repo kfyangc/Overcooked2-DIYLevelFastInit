@@ -158,12 +158,22 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   wall-time fields include native/frame waits and must not be double-counted. Cache
   miss reasons and thumbnail warmup timings distinguish source scans from cache reads.
 - `SetMetadata`, `LevelMetadata`, and `PlayerMetadata` contain only strings, numbers,
-  and arrays. `LevelCatalogCache` writes versioned binary `.catalog` files under
-  `Paths.CachePath/DIYLevelFastInit/`, named by a SHA-256 hash of the normalized directory
-  path. The current schema is 2, with magic `0x32434944`. Validate the directory, info
-  filename, length and UTC modification ticks; enforce bounded lengths and reject
-  trailing data. Writes use a temporary file and read it back before replacement.
-  Read/write failures fall back to discovery, so the cache remains disposable.
+  and arrays. `CatalogIndexStore` stores all level-set scalar catalogs plus verified
+  fast-bundle / non-bundle file stamps (`Name`, `Length`, `Modified`, `Kind`) in one
+  versioned binary file `Paths.CachePath/DIYLevelFastInit/catalog.index` (magic
+  `0x33434944`, schema 3, 32 MiB cap, trailing-data rejected, atomic temp-file readback
+  replacement), falling back to and auto-migrating legacy per-set `<sha256>.catalog`
+  files (magic `0x32434944`, schema 2). `StartupCatalogScan` runs on a single managed
+  background thread to load the unified index, enumerate each set directory once, skip
+  header probes for unchanged verified files, classify Pass-0 vs Pass-1 sets, and
+  preload Pass-0 cached `SetMetadata` + `SetSnapshot` without touching Unity or BepInEx
+  APIs. Pass-0 sets skip `PrepareSetInfoFiles` entirely; only Pass-1 sets (with
+  `.diylevel-fastinit` work dirs or LZMA bundles) spin up a conversion batch. Multiple
+  Pass-0 cache misses use `CatalogMetadataPool` (at most 4 pure-managed workers) while
+  the main thread still validates fingerprints, pauses for transitions/gameplay,
+  publishes in directory order (12 ms frame slice, batched menu refresh), and flushes the
+  unified index once at startup/sync completion. Read/write failures fall back to
+  discovery, so the cache remains disposable.
 - Harmony **postfix** on `DIYLevelEntryUI.AddUI`: re-syncs the menu button list
   (`HealLevelSetButtons`), because the original builds it only once (snapshot guard).
 - The prefix on `DIYLevelAssetBundleManager.SetupSceneDirectoryData` returns

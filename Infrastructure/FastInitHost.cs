@@ -170,6 +170,7 @@ namespace DIYLevelFastInit
             StartupTimings timings = new StartupTimings();
             double preparationMs = 0, commonMs = 0, catalogMs = 0;
             bool complete = false;
+            CatalogMetadataPool metadataPool = null;
             try
             {
                 FastInitPlugin.Log.LogInfo("LoadHeavy started");
@@ -220,8 +221,42 @@ namespace DIYLevelFastInit
                 int sets = 0;
                 bool menuDirty = false;
                 bool menuNeedsHeal = false;
+                if (FastInitPlugin.UseDirectCatalogReader)
+                {
+                    List<StartupCatalogScan.ScannedSet> pass0Misses = new List<StartupCatalogScan.ScannedSet>();
+                    for (int i = 0; i < scannedSets.Length; i++)
+                    {
+                        StartupCatalogScan.ScannedSet candidate = scannedSets[i];
+                        if (!candidate.NeedsConversionWork && candidate.InfoFile != null && candidate.CachedMetadata == null)
+                            pass0Misses.Add(candidate);
+                    }
+                    if (pass0Misses.Count >= 2)
+                    {
+                        try
+                        {
+                            metadataPool = new CatalogMetadataPool(pass0Misses);
+                            FastInitPlugin._catalogPool = metadataPool;
+                            metadataPool.Start();
+                            FastInitPlugin.Log.LogInfo("catalog metadata prefetch pool started: " + metadataPool.Count
+                                + " missed sets across " + metadataPool.WorkerCount + " workers");
+                        }
+                        catch (Exception e)
+                        {
+                            if (metadataPool != null) metadataPool.Dispose();
+                            if (ReferenceEquals(FastInitPlugin._catalogPool, metadataPool)) FastInitPlugin._catalogPool = null;
+                            metadataPool = null;
+                            FastInitPlugin.Log.LogWarning("catalog metadata prefetch pool unavailable: " + e.Message);
+                        }
+                    }
+                }
                 for (int pass = 0; pass < 2; pass++)
                 {
+                    if (pass == 1 && metadataPool != null)
+                    {
+                        metadataPool.Dispose();
+                        if (ReferenceEquals(FastInitPlugin._catalogPool, metadataPool)) FastInitPlugin._catalogPool = null;
+                        metadataPool = null;
+                    }
                     for (int index = 0; index < scannedSets.Length; index++)
                     {
                         StartupCatalogScan.ScannedSet scanned = scannedSets[index];
@@ -260,8 +295,9 @@ namespace DIYLevelFastInit
                             }
                             else
                             {
+                                CatalogMetadataPool.Slot slot = metadataPool != null ? metadataPool.GetSlot(scanned.Index) : null;
                                 yield return Guard(FastInitPlugin.LoadInfoSet(dir, load, scanned.InfoFile,
-                                    scanned.CachedMetadata, scanned.CacheMiss, scanned.CacheReadMs, false),
+                                    scanned.CachedMetadata, scanned.CacheMiss, scanned.CacheReadMs, false, slot),
                                     "catalog " + dir.Name);
                             }
                         }
@@ -347,6 +383,11 @@ namespace DIYLevelFastInit
             }
             finally
             {
+                if (metadataPool != null)
+                {
+                    metadataPool.Dispose();
+                    if (ReferenceEquals(FastInitPlugin._catalogPool, metadataPool)) FastInitPlugin._catalogPool = null;
+                }
                 // Per-set conversion interleaves with the catalog loop, so infoPreparationMs
                 // is a subset of catalogMs, not a phase preceding it.
                 FastInitPlugin.FinishStartupInfoPreparation();
