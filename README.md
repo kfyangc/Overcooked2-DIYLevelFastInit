@@ -4,6 +4,12 @@ Startup and memory optimization for the [OC2DIYLevel](https://github.com/gua248/
 
 [中文说明](README_CN.md)
 
+## Version 1.9.12
+
+[Release notes](RELEASE_NOTES.md#1912)
+
+Consolidates per-set catalog caches into a single `catalog.index` file (with verified fast-bundle stamps and automatic legacy migration), moves startup directory scanning and classification to a background worker with a bounded 4-worker metadata prefetch pool for cold misses, adds a pure-managed `DirectCoverReader` for on-demand cover texture reads backed by a memory-only byte-budget LRU (removing the persistent `.thumb` disk cache and startup prewarming), and trims redundant header probes and SHA-256 passes during LZ4HC bundle conversion.
+
 ## Version 1.9.11
 
 [Release notes](RELEASE_NOTES.md#1911)

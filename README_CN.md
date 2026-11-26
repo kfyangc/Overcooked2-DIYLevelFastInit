@@ -4,6 +4,12 @@
 
 [English README](README.md)
 
+## 1.9.12
+
+[发布说明](RELEASE_NOTES.md#1912)
+
+将分散的目录缓存合并为单文件 `catalog.index`（含已校验快速包指纹，自动迁移旧缓存），启动目录扫描与分组分类移至后台线程，冷启动支持最多 4 线程受控元数据预取；新增纯托管 `DirectCoverReader` 按需直读独立块 LZ4/raw `info*` 封面图并改为纯内存字节预算 LRU（移除磁盘 `.thumb` 缓存与启动后台预热）；合并 LZ4HC 转换阶段的包头探测与校验扫描，减少冗余 SHA-256 计算。
+
 ## 1.9.11
 
 [发布说明](RELEASE_NOTES.md#1911)

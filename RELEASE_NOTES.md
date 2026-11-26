@@ -1,3 +1,21 @@
+# 1.9.12
+
+## 中文
+
+全面优化启动编目速度、关卡封面图预览性能以及资源包 LZ4HC 转换阶段的磁盘与哈希开销。
+
+- **单文件目录索引与后台启动扫描**：将原先按关卡集分散保存的 `<sha256>.catalog` 合并为单个版本化二进制索引 `catalog.index`（自动兼容并迁移旧缓存），同时记录已校验的快速包（LZ4HC / raw / LZ4）与非包文件指纹，未变更文件下次启动直接跳过 UnityFS 包头探测。启动时的索引读取、目录枚举、分组判定与缓存预加载全部移至纯托管后台线程；无需转换的关卡集完全跳过空转换批次，主线程按目录序分片批量发布并合并菜单刷新，冷启动多集未命中时启用最多 4 线程的受控元数据预取池，并在启动/热刷新结束时一次性落盘索引。
+- **封面图 UnityFS 直读与纯内存 LRU 预览缓存**：新增纯托管 `DirectCoverReader`，对独立块 LZ4/raw 格式的 `info*` 包直接按需在后台解析封面纹理（未压缩 `RGB24`/`RGBA32`/`ARGB32`/`BGRA32` 在后台线程缩放到不超过 640×360，`DXT1`/`DXT5` 直接经 `LoadRawTextureData` 上载），绕过原生 `AssetBundle` 加载、`LevelInfoSO` 完整对象图、`ReadPixels`、`EncodeToPNG` 与 `Resources.UnloadUnusedAssets()`；不支持的包格式或跨包外链纹理自动回退原生异步预览。移除磁盘 `.thumb` 缓存与启动后台缩略图预热，改为纯内存字节预算 LRU（24 MiB / 64 张上限，按单关卡集独立指纹校验，进图/退出时清空），并保持异步次帧写入与热刷新期间的直读排空等待。
+- **减少转换期冗余哈希与包头探测**：合并 `InfoBundleOptimizer` 的多次包头探测为单次打开分类（`Classify`），并将转换校验中的输出文件 SHA-256 与逐块解码校验合并为单遍扫描，移除提交前后对源/输出文件的重复全量哈希读取，提升首次与增量 LZ4HC 转换效率。
+
+## English
+
+Significantly speeds up startup cataloging, level cover preview loading, and bundle LZ4HC conversion I/O.
+
+- **Unified catalog index & background startup scan**: Consolidates per-set `<sha256>.catalog` files into a single versioned binary index `catalog.index` (automatically migrating legacy caches) that also stores verified fast-bundle (LZ4HC / raw / LZ4) and non-bundle file stamps so unchanged files skip UnityFS header probes on subsequent launches. Index loading, directory enumeration, Pass-0/Pass-1 classification, and cached metadata preloading now run on a managed background worker; Pass-0 sets bypass empty conversion batches entirely, publish in directory order with batched menu refreshes, use a bounded 4-worker managed metadata prefetch pool for cold misses, and flush the unified index once on completion.
+- **Direct UnityFS cover reader & memory-only preview LRU**: Adds a pure-managed `DirectCoverReader` that reads cover textures directly from independent LZ4/raw `info*` bundles on demand in the background (downscaling uncompressed `RGB24`/`RGBA32`/`ARGB32`/`BGRA32` off the main thread to at most 640×360, and uploading `DXT1`/`DXT5` payloads via `LoadRawTextureData`), bypassing native `AssetBundle` opens, full `LevelInfoSO` graphs, `ReadPixels`, `EncodeToPNG`, and `Resources.UnloadUnusedAssets()`. Unsupported bundles or cross-bundle external sprites/textures fall back seamlessly to the native async preview path. Removes the persistent `.thumb` disk cache and startup thumbnail prewarming in favor of a memory-only byte-budget LRU (24 MiB / 64 entries cap, fingerprinted per level set and cleared on level entry/shutdown), while preserving next-frame sprite application and draining active reads before hot refresh mutates `info*` files.
+- **Fewer redundant SHA-256 passes & header probes during conversion**: Collapses repeated bundle header probes in `InfoBundleOptimizer` into a single open (`UnityFsRepacker.Classify`), merges output hashing with block-decode verification into one pass, and eliminates redundant full-file re-hashes around atomic replacement and backup cleanup.
+
 # 1.9.11
 
 ## 中文
