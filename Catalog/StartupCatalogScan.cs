@@ -110,7 +110,7 @@ namespace DIYLevelFastInit
 
                 if (!_cancelled && Directory.Exists(_levelsDir))
                 {
-                    store.PruneMissingDirectories(existingNormalized);
+                    store.PruneMissingDirectories(_levelsDir, existingNormalized);
                 }
                 _sets = scanned;
             }

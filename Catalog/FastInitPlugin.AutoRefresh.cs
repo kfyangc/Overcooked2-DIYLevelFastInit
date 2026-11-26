@@ -49,7 +49,8 @@ namespace DIYLevelFastInit
 
         private static bool CanRefreshDirectory()
         {
-            return !Loading && !InfoFilesPreparing && DIYLevelAssetBundleManager.IsInitialized
+            return !Loading && !InfoFilesPreparing && !WLoaderInterop.IsConvertingSharedBundles
+                && DIYLevelAssetBundleManager.IsInitialized
                 && RefreshContextIsSafe();
         }
 

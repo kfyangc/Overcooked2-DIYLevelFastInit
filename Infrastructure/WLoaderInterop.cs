@@ -324,8 +324,15 @@ namespace DIYLevelFastInit
 
             List<FileInfo> readyNow = new List<FileInfo>();
             List<FileInfo> toConvert = new List<FileInfo>();
+            List<KeyValuePair<string, AssetBundleCreateRequest>> externalPending =
+                new List<KeyValuePair<string, AssetBundleCreateRequest>>();
             bool restore = FastInitPlugin.RestoreInfoFilesOnStartup;
             bool optimize = !restore && FastInitPlugin.OptimizeSharedCommonBundlesOnStartup;
+            if (optimize)
+            {
+                string indexWarning;
+                CatalogIndexStore.Default.EnsureLoaded(out indexWarning);
+            }
 
             FastInitPlugin.Log.LogInfo("shared dependency bundles: " + batch.Count
                 + " files (parallel: " + diyFiles + " DIYLevel, " + wloaderFiles + " WLoader)");
@@ -347,9 +354,10 @@ namespace DIYLevelFastInit
                     skipped++;
                     DuplicateCommonDialog.RecordDuplicate(file.Name, file.FullName, extPath);
                     FastInitPlugin.Log.LogInfo("skip " + file.Name + ": already loading by another plugin");
+                    TrackExternalPending(externalPending, file.Name, extRequest);
                     continue;
                 }
-                if ((optimize || restore) && FileNeedsSharedWork(file.FullName, restore))
+                if ((optimize || restore) && FileNeedsSharedWork(file, restore))
                     toConvert.Add(file);
                 else
                     readyNow.Add(file);
@@ -367,7 +375,7 @@ namespace DIYLevelFastInit
             {
                 // Dispatch already-fast bundles immediately so warm launches incur zero wait.
                 foreach (FileInfo file in readyNow)
-                    DispatchSharedLoad(file, pending, requests, reaped, ref remaining, ref skipped);
+                    DispatchSharedLoad(file, pending, requests, reaped, externalPending, ref remaining, ref skipped);
 
                 if (toConvert.Count > 0 && !_shutdown)
                 {
@@ -392,12 +400,12 @@ namespace DIYLevelFastInit
                 }
 
                 float nextNotice = started + 15f;
-                while (remaining > 0 || _convertingNames.Count > 0)
+                while (remaining > 0 || externalPending.Count > 0 || _convertingNames.Count > 0)
                 {
                     InfoBundleOptimizationBatch conversion = _conversionBatch;
                     if (conversion != null)
                     {
-                        conversion.Drain(delegate(string message) { FastInitPlugin.Log.LogInfo(message); });
+                        DrainBatchLogs(conversion);
                         string settledPath;
                         InfoBundleOptimizer.Result settledResult;
                         while (conversion.TryDequeueSettled(out settledPath, out settledResult))
@@ -410,11 +418,12 @@ namespace DIYLevelFastInit
                                 || settledResult == InfoBundleOptimizer.Result.Restored)
                                 anyReplaced = true;
                             if (!_shutdown)
-                                DispatchSharedLoad(convertedFile, pending, requests, reaped, ref remaining, ref skipped);
+                                DispatchSharedLoad(convertedFile, pending, requests, reaped, externalPending, ref remaining, ref skipped);
                         }
                         if (conversion.Done)
                         {
-                            conversion.Drain(delegate(string message) { FastInitPlugin.Log.LogInfo(message); });
+                            DrainBatchLogs(conversion);
+                            if (!restore) RecordPreparedSharedStamps(conversion);
                             conversion.Dispose();
                             if (ReferenceEquals(_conversionBatch, conversion)) _conversionBatch = null;
                             if (convertingByPath.Count > 0)
@@ -423,7 +432,7 @@ namespace DIYLevelFastInit
                                 {
                                     _convertingNames.Remove(leftover.Name);
                                     if (!_shutdown)
-                                        DispatchSharedLoad(leftover, pending, requests, reaped, ref remaining, ref skipped);
+                                        DispatchSharedLoad(leftover, pending, requests, reaped, externalPending, ref remaining, ref skipped);
                                 }
                                 convertingByPath.Clear();
                             }
@@ -435,6 +444,8 @@ namespace DIYLevelFastInit
                             }
                         }
                     }
+
+                    ReapExternalPending(externalPending);
 
                     for (int i = 0; i < requests.Count; i++)
                     {
@@ -462,11 +473,11 @@ namespace DIYLevelFastInit
                         FastInitPlugin.Log.LogInfo("shared bundle settled [" + file.Name + "]: "
                             + (int)((Time.realtimeSinceStartup - started) * 1000) + " ms, loaded=" + (bundle != null));
                     }
-                    if (remaining == 0 && _convertingNames.Count == 0) break;
+                    if (remaining == 0 && externalPending.Count == 0 && _convertingNames.Count == 0) break;
                     if (Time.realtimeSinceStartup >= nextNotice)
                     {
                         FastInitPlugin.Log.LogWarning("shared dependency bundles still pending after "
-                            + (int)(Time.realtimeSinceStartup - started) + "s (" + remaining + " loading, "
+                            + (int)(Time.realtimeSinceStartup - started) + "s (" + (remaining + externalPending.Count) + " loading, "
                             + _convertingNames.Count + " optimizing); waiting without duplicate requests");
                         nextNotice += 15f;
                     }
@@ -478,20 +489,72 @@ namespace DIYLevelFastInit
                 InfoBundleOptimizationBatch conversion = _conversionBatch;
                 if (conversion != null)
                 {
-                    conversion.Drain(delegate(string message) { FastInitPlugin.Log.LogInfo(message); });
+                    DrainBatchLogs(conversion);
+                    if (!restore && conversion.Done) RecordPreparedSharedStamps(conversion);
                     conversion.Dispose();
                     if (ReferenceEquals(_conversionBatch, conversion)) _conversionBatch = null;
                 }
                 _convertingNames.Clear();
                 _drained = true;
+                if (CatalogIndexStore.Default.IsDirty) LevelCatalogCache.FlushIndex();
             }
             FastInitPlugin.Log.LogInfo("shared dependency bundles: " + loaded + " loaded, " + skipped + " skipped (dup), "
                 + failed + " failed (" + (int)((Time.realtimeSinceStartup - started) * 1000) + " ms)");
         }
 
-        private static void DispatchSharedLoad(FileInfo file, List<FileInfo> pending, List<AssetBundleCreateRequest> requests,
-            List<bool> reaped, ref int remaining, ref int skipped)
+        private static void DrainBatchLogs(InfoBundleOptimizationBatch conversion)
         {
+            conversion.Drain(
+                delegate(string message) { FastInitPlugin.Log.LogInfo(message); },
+                delegate(string message) { FastInitPlugin.Log.LogDebug(message); });
+        }
+
+        private static void RecordPreparedSharedStamps(InfoBundleOptimizationBatch conversion)
+        {
+            foreach (InfoBundleOptimizationBatch.PreparedFile prepared in conversion.PreparedFiles)
+            {
+                CatalogIndexStore.Default.UpsertFastFile(
+                    Path.GetDirectoryName(prepared.Path),
+                    Path.GetFileName(prepared.Path),
+                    prepared.Length,
+                    prepared.Modified,
+                    FastFileStamp.KindFastBundle);
+            }
+        }
+
+        private static void TrackExternalPending(List<KeyValuePair<string, AssetBundleCreateRequest>> externalPending,
+            string name, AssetBundleCreateRequest request)
+        {
+            if (request == null || request.isDone)
+            {
+                MarkSettled(name);
+                return;
+            }
+            if (_entryWaiting) request.priority = 100;
+            externalPending.Add(new KeyValuePair<string, AssetBundleCreateRequest>(name, request));
+        }
+
+        private static void ReapExternalPending(List<KeyValuePair<string, AssetBundleCreateRequest>> externalPending)
+        {
+            for (int i = externalPending.Count - 1; i >= 0; i--)
+            {
+                AssetBundleCreateRequest req = externalPending[i].Value;
+                if (req != null && !req.isDone)
+                {
+                    if (_entryWaiting) req.priority = 100;
+                    continue;
+                }
+                string name = externalPending[i].Key;
+                externalPending.RemoveAt(i);
+                MarkSettled(name);
+            }
+        }
+
+        private static void DispatchSharedLoad(FileInfo file, List<FileInfo> pending, List<AssetBundleCreateRequest> requests,
+            List<bool> reaped, List<KeyValuePair<string, AssetBundleCreateRequest>> externalPending,
+            ref int remaining, ref int skipped)
+        {
+            if (_settled.Contains(file.Name)) return;
             if (IsResident(file.Name))
             {
                 skipped++;
@@ -507,6 +570,7 @@ namespace DIYLevelFastInit
                 skipped++;
                 DuplicateCommonDialog.RecordDuplicate(file.Name, file.FullName, extPath);
                 FastInitPlugin.Log.LogInfo("skip " + file.Name + ": already loading by another plugin");
+                TrackExternalPending(externalPending, file.Name, extRequest);
                 return;
             }
             AssetBundleCreateRequest request;
@@ -529,15 +593,24 @@ namespace DIYLevelFastInit
             remaining++;
         }
 
-        private static bool FileNeedsSharedWork(string path, bool restore)
+        private static bool FileNeedsSharedWork(FileInfo file, bool restore)
         {
             try
             {
+                string path = file.FullName;
                 string dir = Path.GetDirectoryName(path);
                 if (!string.IsNullOrEmpty(dir) && Directory.Exists(Path.Combine(dir, ".diylevel-fastinit")))
                     return true;
                 if (restore) return false;
-                return BundleCodecs.UnityFsRepacker.NeedsConversion(path);
+                long length = file.Length;
+                long modified = file.LastWriteTimeUtc.Ticks;
+                byte cachedKind;
+                if (CatalogIndexStore.Default.TryGetFastFile(dir, file.Name, length, modified, out cachedKind)
+                    && cachedKind == FastFileStamp.KindFastBundle)
+                    return false;
+                if (BundleCodecs.UnityFsRepacker.NeedsConversion(path)) return true;
+                CatalogIndexStore.Default.UpsertFastFile(dir, file.Name, length, modified, FastFileStamp.KindFastBundle);
+                return false;
             }
             catch { return false; }
         }
