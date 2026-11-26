@@ -274,42 +274,31 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   The optional `OC2StageThumbnailPreview.Patches.PreviewController.UpdatePreview(Image,
   LevelInfoSO)` adapter is installed in `Start`. Cached previews use private copied
   sprites; an uncached preview temporarily retains at most one source set.
-- The thumbnail prefix must only queue a request and return; never call `Resolve`,
-  synchronous `LoadSet`, `LoadFromFile`, or `LoadAsset` from the menu callback.
-  `PreviewRoutine` coalesces focus changes into the latest image/level request and
-  starts work after yielding a frame. `LoadPreview` uses async bundle and info requests,
-  pins `_previewBundles` until every native request finishes, and only applies an image
-  if its request is still current and the menu hierarchy is active. Stale requests are
-  drained and released rather than cancelled or allowed to overwrite a newer image.
-  Drain queued unused-asset collection before starting the next preview, so sustained
-  browsing cannot accumulate detached asset graphs behind an always-busy worker.
-  `PendingLevelInfos` shares the same native request for a selected asset;
-  `PendingInfos` retains the separate full-set fallback request. Refresh
-  cancels the preview selection and waits for its worker to drain before mutating sets.
-- With the optional thumbnail adapter installed, `FinishLoading` queues sequential
-  thumbnail prewarming over the complete catalog, without requiring menu visits.
-  Pin `_warmBundles` while native requests run. Load selected LevelInfo assets, copy
-  one image per frame, and release/wait for cleanup between direct levels. If full-set
-  fallback is needed, reuse that graph for the remaining batch before releasing it.
-  Pause for gameplay, transitions and uncached foreground previews. Refresh invalidates
-  the warmup generation and waits for native requests to drain before changing entries.
-  Cached foreground images bypass the warmup wait and cleanup queue.
-  Preview waits for warmup, cleanup and discovery must check `PreviewIsCurrent` each
-  frame. A new pending scene cancels that request; waiting unconditionally for cleanup
-  would deadlock server preparation waiting for the preview worker to drain, because
-  cleanup is deferred during transitions.
-- `ThumbnailCache` persists versioned `.thumb` files containing a source stamp, bounded
-  dimensions, a SHA-256 checksum and PNG data; empty payloads record absent screenshots.
-  It fingerprints all info/common source files by path, length and UTC modification time.
-  Invalidate the stamp on catalog completion/refresh; source changes conservatively
-  invalidate all thumbnails. Header-only readiness checks avoid decoding during warmup;
-  actual reads verify the full payload and fall back to async loading on corruption.
-  GPU copies handle non-readable source textures and shrink to at most 640 x 360.
-  Keep copied sprites private to the preview adapter: never assign them to public
-  catalog SOs or scene-directory screenshots, which may outlive LRU eviction.
-  Keep at most eight decoded images; clear them at level entry. The single disk writer
-  has a four-item queue, atomic replacement and a 128 MiB oldest-entry eviction limit.
-  Warmup observes writer backpressure. Workers never call Unity APIs off the main thread.
+- The thumbnail prefix must only serve pure in-memory LRU hits (`ThumbnailCache.TryGetMemory`)
+  or queue a background request and return; never call `Resolve`, synchronous `LoadSet`,
+  `LoadFromFile`, or `LoadAsset` from the menu callback.
+  `PreviewRoutine` first tries `DirectCoverReader` via a cancellable `DirectCoverRequest`
+  on the managed thread pool: it indexes bounded independent LZ4/raw UnityFS `info*` bundles
+  (caching lightweight per-set block/offset tables, never Unity assets), follows
+  `LevelInfoSO.screenshot` -> local `Sprite` -> local `Texture2D` (`.resS` or inline mip 0),
+  area-downscales uncompressed `RGB24`/`RGBA32`/`ARGB32`/`BGRA32` covers to at most
+  640 x 360 off the main thread, and passes compressed `DXT1`/`DXT5` payloads straight to
+  `Texture2D.LoadRawTextureData` + `Apply(false, true)` on the main thread. This avoids
+  native `AssetBundle` opens, `LevelInfoSO` graph loads, `ReadPixels`, `EncodeToPNG`, and
+  `Resources.UnloadUnusedAssets()`.
+  Unsupported cases (LZMA bundles, external cross-bundle sprites/textures, rotated packed
+  sprites, unsupported formats) fall back to the native async `LoadPreview` path, which pins
+  `_previewBundles`, waits for cleanup/catalog, copies into the in-memory LRU without PNG
+  encoding, and releases. `WaitForPreview` and `CatalogFilesAreIdle` also wait for
+  `DirectCoverReader.ActiveReads == 0` so hot refresh never mutates an open `info*` file.
+- Startup disk thumbnail prewarming (`QueueThumbnailWarmup`) is now a no-op because direct
+  on-demand reads take milliseconds and there is no persistent `.thumb` disk cache.
+- `ThumbnailCache` is a memory-only byte-budget LRU (24 MiB / 64 entries cap; cleared on
+  level entry and shutdown) fingerprinted per level set by `(InfoLength, InfoMtimeUtc.Ticks)`
+  from `FastInitPlugin.Snapshots` so updating one set does not invalidate unrelated sets.
+  Empty entries record absent screenshots. Keep copied/direct sprites private to the preview
+  adapter: never assign them to public catalog SOs or scene-directory screenshots, which may
+  outlive LRU eviction. Workers never call Unity or BepInEx APIs off the main thread.
 - `InfoBundleGraph` indexes serialized CAB names from info bundle directory tables,
   then reads only serialized metadata prefixes to find external CAB references in the
   selected scene and info files. Follow the transitive closure, including cycles.
