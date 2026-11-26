@@ -220,21 +220,19 @@ namespace DIYLevelFastInit
             HashSet<string> requiredBundles = InfoBundleGraph.Required(files[0].FullName, Path.Combine(path, scene));
             if (client) _clientPreparingBundles = requiredBundles;
             else _preparingBundles = requiredBundles;
-            // Ensure every shared dependency bundle (common0* and commonW*, including
-            // transitive bundle -> bundle references) needed by the info bundles and
-            // scene is resident BEFORE opening info_* or loading LevelInfoSO, covering
-            // both recipe and scene-only material/texture dependencies on slow machines.
-            HashSet<string> sharedBundles = WLoaderInterop.NeededBundles(requiredBundles, Path.Combine(path, scene));
+            // Ensure every shared dependency bundle (common0* and commonW*) has settled
+            // BEFORE opening info_* or loading LevelInfoSO. Once converted to LZ4HC,
+            // startup finishes loading all shared packs in ~1s so this check is a no-op.
             bool waitedShared = false;
-            if (!WLoaderInterop.AllSettled(sharedBundles))
+            if (!WLoaderInterop.AllReady)
             {
                 waitedShared = true;
-                FastInitPlugin.Log.LogInfo(context + "level dependency bundles: " + scene + " -> "
-                    + WLoaderInterop.DescribeBundles(sharedBundles));
-                yield return WLoaderInterop.AwaitBundles(sharedBundles, (settled, fraction) =>
+                FastInitPlugin.Log.LogInfo(context + "waiting for shared dependency bundles before entry: " + scene
+                    + " (" + WLoaderInterop.StateDescription() + ")");
+                yield return WLoaderInterop.AwaitAllReady((settled, total, fraction) =>
                     LevelLoadProgress = context + (fraction > 0.01f
-                        ? "common asset files " + settled + "/" + sharedBundles.Count + " " + (int)(fraction * 100f) + "%"
-                        : "common asset files " + settled + "/" + sharedBundles.Count),
+                        ? "common asset files " + settled + "/" + total + " " + (int)(fraction * 100f) + "%"
+                        : "common asset files " + settled + "/" + total),
                     current);
                 if (!current()) yield break;
             }
@@ -309,19 +307,12 @@ namespace DIYLevelFastInit
             string detail;
             int unresolved = CountUnresolvedReferences(full.Value, out detail);
             if (unresolved == 0) yield break;
-            // Only the dependency bundles this level's info and scene reference (transitively)
-            // must be resident before setup and scene loading; unrelated bundles keep loading
-            // in the background instead of blocking entry.
-            HashSet<string> bundles = WLoaderInterop.NeededBundles(requiredBundles, Path.Combine(path, scene));
             FastInitPlugin.Log.LogWarning("level references unresolved: " + scene + " (" + detail
                 + "; shared bundles " + WLoaderInterop.StateDescription() + ")");
-            FastInitPlugin.Log.LogInfo("level dependency bundles: " + scene + " -> " + WLoaderInterop.DescribeBundles(bundles));
-            // Keep the corner label moving while waiting so the entry never looks frozen.
-            // The corner label sizes itself to its text, so the wording is unconstrained.
-            yield return WLoaderInterop.AwaitBundles(bundles, (settled, fraction) =>
+            yield return WLoaderInterop.AwaitAllReady((settled, total, fraction) =>
                 LevelLoadProgress = fraction > 0.01f
-                    ? "common asset files " + settled + "/" + bundles.Count + " " + (int)(fraction * 100f) + "%"
-                    : "common asset files " + settled + "/" + bundles.Count,
+                    ? "common asset files " + settled + "/" + total + " " + (int)(fraction * 100f) + "%"
+                    : "common asset files " + settled + "/" + total,
                 current);
             if (!current()) yield break;
             for (int attempt = 1; attempt <= 2 && CountUnresolvedReferences(full.Value) > 0; attempt++)

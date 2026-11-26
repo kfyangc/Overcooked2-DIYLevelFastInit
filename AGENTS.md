@@ -382,19 +382,12 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   both DIYLevel `common*` (excluding synchronous `common`) and taken-over WLoader
   `commonW<digits>` shared dependency bundles at equal priority, starting right at the
   beginning of `LoadHeavy` without blocking catalog publication and reaping each request as
-  soon as it finishes. When any owned shared bundle is LZMA-compressed (or has leftover
-  `.diylevel-fastinit` recovery files / restore mode enabled), `LoadSharedBundles` marks
-  those names converting before yielding, pre-indexes every shared bundle's CAB names and
-  outgoing CAB edges into memory (`_cabBundles` / `_sharedBundleRefs`) so `NeededBundles`
-  never contends with `File.Replace`, and runs one `InfoBundleOptimizationBatch` ordered
-  smallest-first that streams each verified replacement directly into
-  `AssetBundle.LoadFromFileAsync` (while already-fast bundles dispatch on frame 0). Level
-  entry promotes queued needed bundles (`Prioritize`), never starts competing `RequestMissing`
-  loads on converting files, waits in `EnsureBundlesSync` before sync fallback, tracks live
-  conversion progress in `PendingFraction` / `OverallWorkUnits` (extending timeout to 300 s
-  while actively converting, keeping the 20 s stall guard), invalidates `ThumbnailCache` on
-  replacement, and defers Pass-1 level-set conversion, hot refresh, and thumbnail warmup
-  until shared conversion finishes so only one memory-budgeted conversion batch runs at once.
+  soon as it finishes. Already-fast bundles dispatch on frame 0; any LZMA-compressed shared
+  bundles (or leftover `.diylevel-fastinit` recovery / restore entries) run in one
+  smallest-first `InfoBundleOptimizationBatch` that streams each verified replacement directly
+  into `AssetBundle.LoadFromFileAsync`, invalidates `ThumbnailCache` on replacement, and
+  defers Pass-1 level-set conversion, hot refresh, and thumbnail warmup until shared
+  conversion finishes so only one memory-budgeted conversion batch runs at once.
   `FastInitPlugin.OnDestroy` cancels the batch via `WLoaderInterop.Shutdown()`. A Harmony prefix on
   WLoader's private `IsBundleLoaded(string)` probe (installed from `Awake`, optionally via an
   early `Assembly.LoadFrom` of `Loader.dll`) reports `commonW<digits>` names as resident, so
@@ -405,14 +398,14 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   If `_depLoadState` reads 0 at load time, the prefix is unpatched and WLoader keeps its own
   scheduling while DIYLevel `common*` packs still load in parallel. Member names are the
   contract with web loader 3.10.2/4.0.0; a contract change degrades to observe mode, never to
-  a double load. Before opening `info_*` or loading `LevelInfoSO` (in both async
-  `PrepareResources` and sync `PrepareLevel`), entry computes the full transitive closure of
-  shared bundles (`NeededBundles`: `requiredBundles` info graphs + scene bundle + transitive
-  `common* -> common*` CAB edges such as `common02/03/04 -> common01 -> common01_textures` and
-  `commonW3/W5/W6 -> commonW1 -> commonW2`), prioritizing (`priority = 100`) and awaiting only
-  the bundles that level references (and dropping any preview-cached `LoadedSet` opened at an
-  earlier `SettledRevision`). Level preparation also retains `EnsureResolvedReferences` as a
-  safety net validating every reference array `SetupConfig` consumes
+  a double load. Because LZ4HC shared packs settle in ~1 s with minimal resident memory,
+  level entry does not build a per-level `common*` dependency graph: before opening `info_*`
+  or loading `LevelInfoSO` (in both async `PrepareResources` and sync `PrepareLevel`), entry
+  simply short-circuits when `WLoaderInterop.AllReady` is true, or waits via
+  `AwaitAllReady` / `EnsureAllReadySync` (boosting in-flight loads to `priority = 100` and
+  dropping any preview-cached `LoadedSet` opened at an earlier `SettledRevision`). Level
+  preparation also retains `EnsureResolvedReferences` as a safety net validating every
+  reference array `SetupConfig` consumes
   (`recipes`, `recipeListSOs` and their phase recipes, `includeRecipeMatchLists`,
   `optionalRecipeMatchListItems`, `allIngredients`, `allCookingSteps`, per-player
   `scriptedRecipes`, horde waves/enemies/recipes): null entries are cross-bundle references
@@ -422,12 +415,11 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   by reflection (`ReadMember`/`ReadItems`) so the assembly still loads with 0.10/0.11, whose
   stub has only the campaign schema. Never reference those members directly — the released
   1.9.8 did and failed to load on those two versions. Waits update the corner label
-  (`common asset files x/y z%`, percent from the pending requests' own progress) and end on the
-  configured timeout (default 60 s) or a 20 s no-progress stall; a scan that cannot run
-  falls back to waiting for every known shared pack (`common0*` and `commonW*`), while a scan
-  that attributes no bundle waits for none. Persisting nulls after up to two info reloads fail
-  with a message naming the null fields. Failed background loads leave the wait list: a corrupt
-  dependency is a reinstall case, not a wait case.
+  (`common asset files x/y z%`, percent from active conversion/load progress) and end on the
+  configured timeout (default 60 s, extended to 300 s while actively converting) or a 20 s
+  no-progress stall. Persisting nulls after up to two info reloads fail with a message naming
+  the null fields. Failed background loads leave the wait list: a corrupt dependency is a
+  reinstall case, not a wait case.
 
 ## Selected level assets
 

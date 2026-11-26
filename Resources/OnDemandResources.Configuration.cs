@@ -56,8 +56,7 @@ namespace DIYLevelFastInit
             if (files.Count > 0)
             {
                 HashSet<string> requiredBundles = InfoBundleGraph.Required(files[0].FullName, Path.Combine(path, scene));
-                HashSet<string> sharedBundles = WLoaderInterop.NeededBundles(requiredBundles, Path.Combine(path, scene));
-                WLoaderInterop.EnsureBundlesSync(sharedBundles);
+                WLoaderInterop.EnsureAllReadySync();
                 LoadedSet cachedSet;
                 if (Sets.TryGetValue(path, out cachedSet) && cachedSet.SharedBundleRevision != WLoaderInterop.SettledRevision)
                     DropCachedSet(path, requiredBundles);
