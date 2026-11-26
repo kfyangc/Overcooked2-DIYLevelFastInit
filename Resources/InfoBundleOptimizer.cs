@@ -57,20 +57,22 @@ namespace DIYLevelFastInit
                     UnityFsRepacker.CheckPlan(source, plan);
                     FileInfo initial = new FileInfo(source);
                     long length = initial.Length, ticks = initial.LastWriteTimeUtc.Ticks;
-                    if (UnityFsRepacker.IsHighCompression(source))
+                    UnityFsRepacker.SourceKind kind = UnityFsRepacker.Classify(source);
+                    if (kind == UnityFsRepacker.SourceKind.AlreadyHighCompression)
                     {
                         VerifyStampExclusive(source, length, ticks);
                         preparedLength = length; preparedModified = ticks;
                         Log(log, "level bundle already optimized: " + System.IO.Path.GetFileName(source));
                         return Result.AlreadyOptimized;
                     }
-                    if (!UnityFsRepacker.IsEligible(source))
+                    if (kind == UnityFsRepacker.SourceKind.Unsupported)
                     {
                         Log(log, "level bundle source layout unsupported or unavailable; original retained: " + source);
                         return Result.Unsupported;
                     }
-                    if (!UnityFsRepacker.NeedsConversion(source))
+                    if (kind == UnityFsRepacker.SourceKind.FastLayout)
                     {
+                        preparedLength = length; preparedModified = ticks;
                         Log(log, "level bundle layout already fast (raw/LZ4); original kept: " + source);
                         return Result.FastLayout;
                     }
@@ -81,7 +83,8 @@ namespace DIYLevelFastInit
                     UnityFsRepacker.CheckPlan(source, plan);
                     FileInfo initial = new FileInfo(source);
                     long initialLength = initial.Length, initialModified = initial.LastWriteTimeUtc.Ticks;
-                    if (UnityFsRepacker.IsHighCompression(source))
+                    UnityFsRepacker.SourceKind kind = UnityFsRepacker.Classify(source);
+                    if (kind == UnityFsRepacker.SourceKind.AlreadyHighCompression)
                     {
                         if (!CleanupOriginals(source, directory, cancelled, log)) return Result.Failed;
                         VerifyStampExclusive(source, initialLength, initialModified);
@@ -89,13 +92,14 @@ namespace DIYLevelFastInit
                         Log(log, "level bundle already optimized: " + System.IO.Path.GetFileName(source));
                         return Result.AlreadyOptimized;
                     }
-                    if (!UnityFsRepacker.IsEligible(source))
+                    if (kind == UnityFsRepacker.SourceKind.Unsupported)
                     {
                         Log(log, "level bundle source layout unsupported or unavailable; original retained: " + source);
                         return Result.Unsupported;
                     }
-                    if (!UnityFsRepacker.NeedsConversion(source))
+                    if (kind == UnityFsRepacker.SourceKind.FastLayout)
                     {
+                        preparedLength = initialLength; preparedModified = initialModified;
                         Log(log, "level bundle layout already fast (raw/LZ4); original kept: " + source);
                         return Result.FastLayout;
                     }
@@ -105,12 +109,12 @@ namespace DIYLevelFastInit
                     Log(log, "level bundle optimization started: " + source);
                     converted = Unique(directory, "converted-", ".tmp");
                     UnityFsRepacker.ConversionResult result = UnityFsRepacker.Convert(source, converted, cancelled, null, scheduler, plan, progress);
-                    UnityFsRepacker.ValidateConverted(source, converted, result, cancelled, progress);
+                    // Source hash is rechecked under an exclusive handle immediately before commit.
+                    UnityFsRepacker.ValidateConverted(source, converted, result, cancelled, false, progress);
                     if (progress != null) try { progress(0.98f); } catch (Exception) { }
                     CheckCancelled(cancelled);
                     if (result == null || result.SourceLength != length || !ValidHash(result.SourceHash) || !ValidHash(result.OutputHash))
                         throw new IOException("Converted source fingerprint does not match the preparation snapshot");
-                    VerifyExclusive(source, length, ticks, result.SourceHash, cancelled);
                     string id = Guid.NewGuid().ToString("N");
                     Record record = new Record { Name = System.IO.Path.GetFileName(source), SourceLength = length, SourceTicks = ticks,
                         OutputLength = result.OutputLength, OutputTicks = File.GetLastWriteTimeUtc(converted).Ticks,
@@ -126,14 +130,14 @@ namespace DIYLevelFastInit
                     recordTemporary = null;
                     VerifyExclusive(source, length, ticks, result.SourceHash, cancelled);
                     CheckCancelled(cancelled);
+                    long committedModified;
                     if (!Commit(source, converted, record.Backup, record.SourceLength, record.SourceHash,
-                        record.OutputLength, record.OutputHash, directory, log)) return Result.Failed;
+                        record.OutputLength, record.OutputHash, directory, log, out committedModified)) return Result.Failed;
                     converted = null;
-                    if (!DiscardOriginal(source, record, null, log)) return Result.Failed;
+                    if (!DiscardVerifiedOriginal(source, record, committedModified, log)) return Result.Failed;
                     if (!CleanupOriginals(source, directory, null, log)) return Result.Failed;
-                    long outputModified = File.GetLastWriteTimeUtc(source).Ticks;
-                    VerifyExclusive(source, result.OutputLength, outputModified, result.OutputHash, null);
-                    preparedLength = result.OutputLength; preparedModified = outputModified;
+                    VerifyStampExclusive(source, result.OutputLength, committedModified);
+                    preparedLength = result.OutputLength; preparedModified = committedModified;
                     Log(log, "level bundle optimized in place; original discarded: " + source);
                     return Result.Replaced;
                 }
@@ -183,7 +187,8 @@ namespace DIYLevelFastInit
                         VerifyExclusive(source, length, ticks, currentHash, cancelled);
                         CheckCancelled(cancelled);
                         string retained = Unique(directory, "restored-output-", ".bundle");
-                        if (!Commit(source, temporary, retained, length, currentHash, record.SourceLength, record.SourceHash, directory, log)) return Result.Failed;
+                        long restoredModified;
+                        if (!Commit(source, temporary, retained, length, currentHash, record.SourceLength, record.SourceHash, directory, log, out restoredModified)) return Result.Failed;
                         temporary = null;
                         Log(log, "original level bundle restored: " + source + " (optimized version retained: " + retained + ")");
                         return Result.Restored;
@@ -198,13 +203,15 @@ namespace DIYLevelFastInit
         }
 
         private static bool Commit(string source, string replacement, string backup, long beforeLength, byte[] beforeHash,
-            long afterLength, byte[] afterHash, string directory, Action<string> log)
+            long afterLength, byte[] afterHash, string directory, Action<string> log, out long committedModified)
         {
+            committedModified = 0;
             try
             {
                 if (File.Exists(backup)) throw new IOException("Refusing to overwrite an existing original/recovery backup");
                 File.Replace(replacement, source, backup, false);
-                if (Matches(backup, beforeLength, beforeHash, null) && Matches(source, afterLength, afterHash, null)) return true;
+                if (Matches(backup, beforeLength, beforeHash, null)
+                    && MatchesExclusive(source, afterLength, afterHash, out committedModified)) return true;
                 Log(log, "in-place replacement verification failed; restoring the exact captured original: " + source);
             }
             catch (Exception error)
@@ -272,6 +279,24 @@ namespace DIYLevelFastInit
                 if (!DiscardOriginal(source, record, cancelled, log)) complete = false;
             }
             return complete;
+        }
+
+        // Deletes the backup and record just verified by Commit without re-hashing both files.
+        private static bool DiscardVerifiedOriginal(string source, Record record, long committedModified, Action<string> log)
+        {
+            try
+            {
+                VerifyStampExclusive(source, record.OutputLength, committedModified);
+                if (File.Exists(record.Backup)) File.Delete(record.Backup);
+                File.Delete(record.Path);
+                Log(log, "verified original bundle discarded: " + record.Backup);
+                return true;
+            }
+            catch (Exception error)
+            {
+                Log(log, "original cleanup failed; verified replacement and remaining recovery files retained: " + source + "\n" + error);
+                return false;
+            }
         }
 
         private static bool DiscardOriginal(string source, Record record, Func<bool> cancelled, Action<string> log)
@@ -415,6 +440,21 @@ namespace DIYLevelFastInit
                 while ((count = stream.Read(buffer, 0, buffer.Length)) != 0) { CheckCancelled(cancelled); hash.TransformBlock(buffer, 0, count, buffer, 0); }
                 hash.TransformFinalBlock(new byte[0], 0, 0); return hash.Hash;
             }
+        }
+
+        private static bool MatchesExclusive(string path, long length, byte[] hash, out long modified)
+        {
+            modified = 0;
+            try
+            {
+                using (FileStream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+                {
+                    if (stream.Length != length || !Same(HashStream(stream, null), hash)) return false;
+                    modified = File.GetLastWriteTimeUtc(path).Ticks;
+                    return true;
+                }
+            }
+            catch (Exception) { return false; }
         }
 
         private static bool Matches(string path, long length, byte[] hash, Func<bool> cancelled)

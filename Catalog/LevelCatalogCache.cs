@@ -21,7 +21,47 @@ namespace DIYLevelFastInit
 
         internal static SetMetadata ReadCachedData(DirectoryInfo dir, FileInfo file, out string miss)
         {
+            string warning;
+            SetMetadata result = ReadCachedData(dir, file, out miss, out warning);
+            if (warning != null) FastInitPlugin.Log.LogWarning(warning);
+            return result;
+        }
+
+        // Pure managed cache lookup safe to call from background workers (never touches Unity or BepInEx Log).
+        // Checks the unified single-file index first, then falls back to legacy per-set .catalog files
+        // and promotes valid legacy entries into the unified index so the next startup needs one read.
+        internal static SetMetadata ReadCachedData(DirectoryInfo dir, FileInfo file, out string miss, out string warning)
+        {
             miss = null;
+            warning = null;
+            CatalogIndexStore store = CatalogIndexStore.Default;
+            string indexWarning;
+            store.EnsureLoaded(out indexWarning);
+            if (indexWarning != null) warning = indexWarning;
+
+            SetMetadata data;
+            string indexMiss;
+            if (store.TryGetMetadata(dir, file, out data, out indexMiss))
+                return data;
+
+            // Legacy per-set .catalog fallback for seamless migration from older FastInit caches.
+            string legacyMiss;
+            string legacyWarning;
+            SetMetadata legacy = ReadLegacyCachedData(dir, file, out legacyMiss, out legacyWarning);
+            if (legacy != null)
+            {
+                store.PutMetadata(dir.FullName, legacy);
+                return legacy;
+            }
+            if (legacyWarning != null) warning = warning == null ? legacyWarning : warning + "; " + legacyWarning;
+            miss = store.LoadedFromDisk ? indexMiss : legacyMiss;
+            return null;
+        }
+
+        private static SetMetadata ReadLegacyCachedData(DirectoryInfo dir, FileInfo file, out string miss, out string warning)
+        {
+            miss = null;
+            warning = null;
             try
             {
                 string path = CachePath(dir);
@@ -40,7 +80,7 @@ namespace DIYLevelFastInit
             catch (Exception e)
             {
                 miss = "unreadable cache (" + e.GetType().Name + ")";
-                FastInitPlugin.Log.LogWarning("catalog cache ignored [" + dir.Name + "]: " + e.Message);
+                warning = "catalog cache ignored [" + dir.Name + "]: " + e.Message;
                 return null;
             }
         }
@@ -48,11 +88,18 @@ namespace DIYLevelFastInit
         internal static LevelSetInfoSO TryRead(DirectoryInfo dir, FileInfo file, InfoLoad timing)
         {
             System.Diagnostics.Stopwatch timer = System.Diagnostics.Stopwatch.StartNew();
-            SetMetadata data = ReadCachedData(dir, file, out timing.CacheMiss);
+            string warning;
+            SetMetadata data = ReadCachedData(dir, file, out timing.CacheMiss, out warning);
             timing.CacheReadMs = timer.Elapsed.TotalMilliseconds;
+            if (warning != null) FastInitPlugin.Log.LogWarning(warning);
             if (data == null) return null;
-            timer.Reset();
-            timer.Start();
+            return CreateFromCachedMetadata(dir, data, timing);
+        }
+
+        // Main-thread lightweight SO creation from pre-validated SetMetadata (no disk I/O).
+        internal static LevelSetInfoSO CreateFromCachedMetadata(DirectoryInfo dir, SetMetadata data, InfoLoad timing)
+        {
+            System.Diagnostics.Stopwatch timer = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 LevelSetInfoSO result = data.Create();
@@ -70,7 +117,16 @@ namespace DIYLevelFastInit
             finally { timing.CreateMs = timer.Elapsed.TotalMilliseconds; }
         }
 
-        internal static LevelSetInfoSO Extract(DirectoryInfo dir, FileInfo file, LevelSetInfoSO full)
+        internal static void FlushIndex()
+        {
+            string warning;
+            bool flushed = CatalogIndexStore.Default.Flush(out warning);
+            if (warning != null) FastInitPlugin.Log.LogWarning(warning);
+            else if (flushed)
+                FastInitPlugin.Log.LogInfo("catalog index saved: " + CatalogIndexStore.Default.EntryCount + " entries");
+        }
+
+        internal static LevelSetInfoSO Extract(DirectoryInfo dir, FileInfo file, LevelSetInfoSO full, bool flushImmediately = true)
         {
             try
             {
@@ -94,7 +150,7 @@ namespace DIYLevelFastInit
                             PlayerMetadata.From(level.config_3p), PlayerMetadata.From(level.config_4p) }
                     };
                 }
-                return CreateAndStore(dir, file, data);
+                return CreateAndStore(dir, file, data, flushImmediately);
             }
             catch (Exception e)
             {
@@ -103,48 +159,16 @@ namespace DIYLevelFastInit
             }
         }
 
-        internal static LevelSetInfoSO CreateAndStore(DirectoryInfo dir, FileInfo file, SetMetadata data)
+        internal static LevelSetInfoSO CreateAndStore(DirectoryInfo dir, FileInfo file, SetMetadata data, bool flushImmediately = true)
         {
             if (!data.IsValid(dir, file)) throw new IOException("Invalid level catalog");
             LevelSetInfoSO result = data.Create();
-            Write(dir, data);
+            CatalogIndexStore.Default.PutMetadata(dir.FullName, data);
+            if (flushImmediately) FlushIndex();
             return result;
         }
 
-        private static void Write(DirectoryInfo dir, SetMetadata data)
-        {
-            string temporary = null;
-            try
-            {
-                string path = CachePath(dir);
-                Directory.CreateDirectory(Path.GetDirectoryName(path));
-                temporary = path + ".tmp";
-                using (FileStream stream = File.Create(temporary))
-                using (BinaryWriter writer = new BinaryWriter(stream, Encoding.UTF8)) WriteData(writer, data);
-                SetMetadata restored;
-                using (FileStream stream = File.OpenRead(temporary))
-                using (BinaryReader reader = new BinaryReader(stream, Encoding.UTF8)) restored = ReadData(reader);
-                if (!restored.IsValid(dir, new FileInfo(Path.Combine(dir.FullName, data.infoFile))))
-                    throw new IOException("Catalog binary did not preserve metadata");
-                if (File.Exists(path)) File.Replace(temporary, path, null);
-                else File.Move(temporary, path);
-            }
-            catch (Exception e)
-            {
-                FastInitPlugin.Log.LogWarning("catalog cache write skipped: " + e.Message);
-            }
-            finally
-            {
-                if (temporary != null && File.Exists(temporary))
-                {
-                    try { File.Delete(temporary); }
-                    catch (IOException) { }
-                    catch (UnauthorizedAccessException) { }
-                }
-            }
-        }
-
-        private static void WriteText(BinaryWriter writer, string value)
+        internal static void WriteText(BinaryWriter writer, string value)
         {
             if (value == null) { writer.Write(-1); return; }
             byte[] bytes = Encoding.UTF8.GetBytes(value);
@@ -153,7 +177,7 @@ namespace DIYLevelFastInit
             writer.Write(bytes);
         }
 
-        private static string ReadText(BinaryReader reader)
+        internal static string ReadText(BinaryReader reader)
         {
             int length = reader.ReadInt32();
             if (length == -1) return null;
@@ -162,7 +186,7 @@ namespace DIYLevelFastInit
             return Encoding.UTF8.GetString(reader.ReadBytes(length));
         }
 
-        private static int ReadCount(BinaryReader reader)
+        internal static int ReadCount(BinaryReader reader)
         {
             int count = reader.ReadInt32();
             if (count < 0 || count > 20000) throw new IOException("Invalid catalog array length");
@@ -209,6 +233,13 @@ namespace DIYLevelFastInit
 
         internal static SetMetadata ReadData(BinaryReader reader)
         {
+            SetMetadata data = ReadDataBody(reader);
+            if (reader.BaseStream.Position != reader.BaseStream.Length) throw new IOException("Trailing catalog data");
+            return data;
+        }
+
+        internal static SetMetadata ReadDataBody(BinaryReader reader)
+        {
             if (reader.ReadInt32() != 0x32434944 || reader.ReadInt32() != 2)
                 throw new IOException("Unsupported catalog format");
             SetMetadata data = new SetMetadata();
@@ -246,7 +277,6 @@ namespace DIYLevelFastInit
                     };
                 }
             }
-            if (reader.BaseStream.Position != reader.BaseStream.Length) throw new IOException("Trailing catalog data");
             return data;
         }
 

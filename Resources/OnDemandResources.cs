@@ -39,6 +39,7 @@ namespace DIYLevelFastInit
             internal LevelInfoSO Level;
             internal string Path;
             internal bool Started;
+            internal DirectCoverRequest Direct;
         }
 
         private static readonly Dictionary<string, LoadedSet> Sets = new Dictionary<string, LoadedSet>(StringComparer.OrdinalIgnoreCase);
@@ -83,6 +84,7 @@ namespace DIYLevelFastInit
         private static readonly Dictionary<string, BundleFileCache.Lease> InfoBundleLeases = new Dictionary<string, BundleFileCache.Lease>(StringComparer.OrdinalIgnoreCase);
         private static readonly Dictionary<string, AssetBundleRequest> PendingLevelInfos = new Dictionary<string, AssetBundleRequest>(StringComparer.OrdinalIgnoreCase);
         private static SaveSelectionView _saveSelectionView;
+        private static DirectCoverRequest _directCoverRequest;
 
         internal static bool IsTransitioning { get { return _pendingScene != null; } }
         internal static bool IsClientTransition { get { return IsTransitioning && !ConnectionStatusPublicizer.IsHost() && ConnectionStatusPublicizer.IsInSession(); } }

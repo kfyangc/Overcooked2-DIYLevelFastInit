@@ -181,7 +181,7 @@ namespace DIYLevelFastInit
             throw new IOException("Truncated UnityFS metadata");
         }
 
-        private static byte[] Decode(BinaryReader reader, int packed, int size, int compression, int prefix)
+        internal static byte[] Decode(BinaryReader reader, int packed, int size, int compression, int prefix)
         {
             if (prefix < 0 || prefix > size || prefix > MaxPrefix) throw new IOException("Invalid UnityFS prefix");
             if (compression == 0) return Exact(reader, prefix);

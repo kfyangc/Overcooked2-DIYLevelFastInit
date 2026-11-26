@@ -282,6 +282,7 @@ namespace DIYLevelFastInit
                     _directoryChanged = true;
                 }
                 Syncing = false;
+                LevelCatalogCache.FlushIndex();
                 FinishLoading();
             }
         }

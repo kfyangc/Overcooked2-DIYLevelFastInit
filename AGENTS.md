@@ -158,12 +158,22 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   wall-time fields include native/frame waits and must not be double-counted. Cache
   miss reasons and thumbnail warmup timings distinguish source scans from cache reads.
 - `SetMetadata`, `LevelMetadata`, and `PlayerMetadata` contain only strings, numbers,
-  and arrays. `LevelCatalogCache` writes versioned binary `.catalog` files under
-  `Paths.CachePath/DIYLevelFastInit/`, named by a SHA-256 hash of the normalized directory
-  path. The current schema is 2, with magic `0x32434944`. Validate the directory, info
-  filename, length and UTC modification ticks; enforce bounded lengths and reject
-  trailing data. Writes use a temporary file and read it back before replacement.
-  Read/write failures fall back to discovery, so the cache remains disposable.
+  and arrays. `CatalogIndexStore` stores all level-set scalar catalogs plus verified
+  fast-bundle / non-bundle file stamps (`Name`, `Length`, `Modified`, `Kind`) in one
+  versioned binary file `Paths.CachePath/DIYLevelFastInit/catalog.index` (magic
+  `0x33434944`, schema 3, 32 MiB cap, trailing-data rejected, atomic temp-file readback
+  replacement), falling back to and auto-migrating legacy per-set `<sha256>.catalog`
+  files (magic `0x32434944`, schema 2). `StartupCatalogScan` runs on a single managed
+  background thread to load the unified index, enumerate each set directory once, skip
+  header probes for unchanged verified files, classify Pass-0 vs Pass-1 sets, and
+  preload Pass-0 cached `SetMetadata` + `SetSnapshot` without touching Unity or BepInEx
+  APIs. Pass-0 sets skip `PrepareSetInfoFiles` entirely; only Pass-1 sets (with
+  `.diylevel-fastinit` work dirs or LZMA bundles) spin up a conversion batch. Multiple
+  Pass-0 cache misses use `CatalogMetadataPool` (at most 4 pure-managed workers) while
+  the main thread still validates fingerprints, pauses for transitions/gameplay,
+  publishes in directory order (12 ms frame slice, batched menu refresh), and flushes the
+  unified index once at startup/sync completion. Read/write failures fall back to
+  discovery, so the cache remains disposable.
 - Harmony **postfix** on `DIYLevelEntryUI.AddUI`: re-syncs the menu button list
   (`HealLevelSetButtons`), because the original builds it only once (snapshot guard).
 - The prefix on `DIYLevelAssetBundleManager.SetupSceneDirectoryData` returns
@@ -264,42 +274,35 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   The optional `OC2StageThumbnailPreview.Patches.PreviewController.UpdatePreview(Image,
   LevelInfoSO)` adapter is installed in `Start`. Cached previews use private copied
   sprites; an uncached preview temporarily retains at most one source set.
-- The thumbnail prefix must only queue a request and return; never call `Resolve`,
-  synchronous `LoadSet`, `LoadFromFile`, or `LoadAsset` from the menu callback.
-  `PreviewRoutine` coalesces focus changes into the latest image/level request and
-  starts work after yielding a frame. `LoadPreview` uses async bundle and info requests,
-  pins `_previewBundles` until every native request finishes, and only applies an image
-  if its request is still current and the menu hierarchy is active. Stale requests are
-  drained and released rather than cancelled or allowed to overwrite a newer image.
-  Drain queued unused-asset collection before starting the next preview, so sustained
-  browsing cannot accumulate detached asset graphs behind an always-busy worker.
-  `PendingLevelInfos` shares the same native request for a selected asset;
-  `PendingInfos` retains the separate full-set fallback request. Refresh
-  cancels the preview selection and waits for its worker to drain before mutating sets.
-- With the optional thumbnail adapter installed, `FinishLoading` queues sequential
-  thumbnail prewarming over the complete catalog, without requiring menu visits.
-  Pin `_warmBundles` while native requests run. Load selected LevelInfo assets, copy
-  one image per frame, and release/wait for cleanup between direct levels. If full-set
-  fallback is needed, reuse that graph for the remaining batch before releasing it.
-  Pause for gameplay, transitions and uncached foreground previews. Refresh invalidates
-  the warmup generation and waits for native requests to drain before changing entries.
-  Cached foreground images bypass the warmup wait and cleanup queue.
-  Preview waits for warmup, cleanup and discovery must check `PreviewIsCurrent` each
-  frame. A new pending scene cancels that request; waiting unconditionally for cleanup
-  would deadlock server preparation waiting for the preview worker to drain, because
-  cleanup is deferred during transitions.
-- `ThumbnailCache` persists versioned `.thumb` files containing a source stamp, bounded
-  dimensions, a SHA-256 checksum and PNG data; empty payloads record absent screenshots.
-  It fingerprints all info/common source files by path, length and UTC modification time.
-  Invalidate the stamp on catalog completion/refresh; source changes conservatively
-  invalidate all thumbnails. Header-only readiness checks avoid decoding during warmup;
-  actual reads verify the full payload and fall back to async loading on corruption.
-  GPU copies handle non-readable source textures and shrink to at most 640 x 360.
-  Keep copied sprites private to the preview adapter: never assign them to public
-  catalog SOs or scene-directory screenshots, which may outlive LRU eviction.
-  Keep at most eight decoded images; clear them at level entry. The single disk writer
-  has a four-item queue, atomic replacement and a 128 MiB oldest-entry eviction limit.
-  Warmup observes writer backpressure. Workers never call Unity APIs off the main thread.
+- The thumbnail prefix must always hide synchronously (`ThumbnailCache.Hide`), never
+  apply `ThumbnailCache.Show` synchronously or call `Resolve`, `LoadSet`, `LoadFromFile`,
+  or `LoadAsset` from the menu callback: callers such as `DIYLevelSorting` reset
+  `Image.sprite` and activate the preview container right after `PreviewPrefix` returns,
+  then treat `_boundKey != null && sprite == null` as an empty screenshot. On memory misses,
+  `PreviewPrefix` may immediately start a pure-managed `DirectCoverRequest` on the thread
+  pool so I/O overlaps with `PreviewRoutine`'s initial `yield return null` frame.
+  After yielding a frame, `PreviewRoutine` validates `PreviewIsCurrent`, serves memory LRU
+  hits directly, or consumes the `DirectCoverRequest` (`DirectCoverReader` indexes bounded
+  independent LZ4/raw UnityFS `info*` bundles, caches lightweight per-set block/offset
+  tables, follows `LevelInfoSO.screenshot` -> local `Sprite` -> local `Texture2D` `.resS`
+  or inline mip 0, area-downscales uncompressed `RGB24`/`RGBA32`/`ARGB32`/`BGRA32` covers
+  to at most 640 x 360 off the main thread, and passes `DXT1`/`DXT5` payloads straight to
+  `Texture2D.LoadRawTextureData` + `Apply(false, true)` on the main thread). This avoids
+  native `AssetBundle` opens, `LevelInfoSO` graph loads, `ReadPixels`, `EncodeToPNG`, and
+  `Resources.UnloadUnusedAssets()`.
+  Unsupported cases (LZMA bundles, external cross-bundle sprites/textures, rotated packed
+  sprites, unsupported formats) fall back to the native async `LoadPreview` path, which pins
+  `_previewBundles`, waits for cleanup/catalog, copies into the in-memory LRU without PNG
+  encoding, and releases. `WaitForPreview` and `CatalogFilesAreIdle` also wait for
+  `DirectCoverReader.ActiveReads == 0` so hot refresh never mutates an open `info*` file.
+- Startup disk thumbnail prewarming (`QueueThumbnailWarmup`) is now a no-op because direct
+  on-demand reads take milliseconds and there is no persistent `.thumb` disk cache.
+- `ThumbnailCache` is a memory-only byte-budget LRU (24 MiB / 64 entries cap; cleared on
+  level entry and shutdown) fingerprinted per level set by `(InfoLength, InfoMtimeUtc.Ticks)`
+  from `FastInitPlugin.Snapshots` so updating one set does not invalidate unrelated sets.
+  Empty entries record absent screenshots. Keep copied/direct sprites private to the preview
+  adapter: never assign them to public catalog SOs or scene-directory screenshots, which may
+  outlive LRU eviction. Workers never call Unity or BepInEx APIs off the main thread.
 - `InfoBundleGraph` indexes serialized CAB names from info bundle directory tables,
   then reads only serialized metadata prefixes to find external CAB references in the
   selected scene and info files. Follow the transitive closure, including cycles.
@@ -386,7 +389,7 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   bundles (or leftover `.diylevel-fastinit` recovery / restore entries) run in one
   smallest-first `InfoBundleOptimizationBatch` that streams each verified replacement directly
   into `AssetBundle.LoadFromFileAsync`, invalidates `ThumbnailCache` on replacement, and
-  defers Pass-1 level-set conversion, hot refresh, and thumbnail warmup until shared
+  defers Pass-1 level-set conversion and hot refresh (manual and automatic) until shared
   conversion finishes so only one memory-budgeted conversion batch runs at once.
   `FastInitPlugin.OnDestroy` cancels the batch via `WLoaderInterop.Shutdown()`. A Harmony prefix on
   WLoader's private `IsBundleLoaded(string)` probe (installed from `Awake`, optionally via an

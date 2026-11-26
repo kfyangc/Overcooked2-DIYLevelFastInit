@@ -125,6 +125,7 @@ namespace DIYLevelFastInit
             _warmGeneration++;
             _warmQueued = false;
             CancelPreview();
+            DirectCoverReader.ClearCache();
             ReleaseUnused();
         }
 
