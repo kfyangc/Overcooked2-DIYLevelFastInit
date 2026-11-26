@@ -4,6 +4,12 @@ Startup and memory optimization for the [OC2DIYLevel](https://github.com/gua248/
 
 [中文说明](README_CN.md)
 
+## Version 1.9.11
+
+[Release notes](RELEASE_NOTES.md#1911)
+
+Loads DIYLevel `common0*` and taken-over WLoader `commonW*` shared dependency bundles together in parallel in the background at equal priority (no longer blocking catalog startup), computes the full transitive dependency closure (`info_*`, cross-set `info_*`, scene bundle, and `common* -> common*` edges) before opening level info so slow machines wait only for the exact packs a level needs, and fixes false duplicate warnings when `OC2DIYLevelRuntimeWLoader` is co-located inside `OC2DIYLevel/`. Genuine cross-directory duplicates still trigger the warning dialog.
+
 ## Version 1.9.10
 
 [Release notes](RELEASE_NOTES.md#1910)

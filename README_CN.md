@@ -4,6 +4,12 @@
 
 [English README](README.md)
 
+## 1.9.11
+
+[发布说明](RELEASE_NOTES.md#1911)
+
+将 DIYLevel `common0*` 与接管的 WLoader `commonW*` 统一以相同优先级在后台并行加载（不再阻塞启动目录发布），进图前按完整传递依赖闭包（`info_*`、跨集 `info_*`、场景包以及 `common* -> common*` 传递依赖）提前提升并等待本关所需依赖包，防止低配机提前进图丢素材；同时修复将 `OC2DIYLevelRuntimeWLoader` 混装在 `OC2DIYLevel/` 同目录时的误报，跨目录真实重复仍会正常警告。
+
 ## 1.9.10
 
 [发布说明](RELEASE_NOTES.md#1910)

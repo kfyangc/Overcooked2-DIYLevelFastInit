@@ -377,17 +377,27 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 - `LevelConfigFactory` binds the installed `SetupConfig` signature. For 0.11.1, initialize the
   standard and Horde template descriptors before setting `commonBundle` and keep the factory
   call-site hooks that track owned allocations and diagnose missing resources.
-- `WLoaderInterop` takes over the web loader's `commonW*` shared dependency bundles. A Harmony
-  prefix on its private `IsBundleLoaded(string)` probe (installed from `Awake`, optionally via
-  an early `Assembly.LoadFrom` of `Loader.dll`) reports `commonW<digits>` names as resident, so
-  its serial background queue skips them; `LoadHeavy` then loads every file with one
-  `AssetBundle.LoadFromFileAsync` per bundle in the same frame (all packs load concurrently, no
-  fixed order — whichever pack a level needs is already under way). The probe call only
-  happens after that loader activated its dependency pipeline, so suppression never strands a
-  bundle; if `_depLoadState` reads 0 at takeover time, the prefix is unpatched and the loader
-  keeps its own scheduling (observe mode: waits track Unity residency). Member names are the
+- `WLoaderInterop` coordinates parallel background loading for both DIYLevel `common*`
+  (excluding synchronous `common`) and taken-over WLoader `commonW<digits>` shared dependency
+  bundles at equal priority, starting right at the beginning of `LoadHeavy` without blocking
+  catalog publication and reaping each request as soon as it finishes. A Harmony prefix on
+  WLoader's private `IsBundleLoaded(string)` probe (installed from `Awake`, optionally via an
+  early `Assembly.LoadFrom` of `Loader.dll`) reports `commonW<digits>` names as resident, so
+  its serial background queue skips them; `OwnsSharedBundle` (also resolving `_loaderDir` from
+  already-loaded assemblies when takeover is off) ensures co-locating `Loader.dll` inside
+  `OC2DIYLevel/` never double-loads `commonW*` or triggers false duplicate warnings, while
+  cross-directory stale `commonW*` copies are still detected (preferring WLoader's copy).
+  If `_depLoadState` reads 0 at load time, the prefix is unpatched and WLoader keeps its own
+  scheduling while DIYLevel `common*` packs still load in parallel. Member names are the
   contract with web loader 3.10.2/4.0.0; a contract change degrades to observe mode, never to
-  a double load. Level preparation validates every reference array `SetupConfig` consumes
+  a double load. Before opening `info_*` or loading `LevelInfoSO` (in both async
+  `PrepareResources` and sync `PrepareLevel`), entry computes the full transitive closure of
+  shared bundles (`NeededBundles`: `requiredBundles` info graphs + scene bundle + transitive
+  `common* -> common*` CAB edges such as `common02/03/04 -> common01 -> common01_textures` and
+  `commonW3/W5/W6 -> commonW1 -> commonW2`), prioritizing (`priority = 100`) and awaiting only
+  the bundles that level references (and dropping any preview-cached `LoadedSet` opened at an
+  earlier `SettledRevision`). Level preparation also retains `EnsureResolvedReferences` as a
+  safety net validating every reference array `SetupConfig` consumes
   (`recipes`, `recipeListSOs` and their phase recipes, `includeRecipeMatchLists`,
   `optionalRecipeMatchListItems`, `allIngredients`, `allCookingSteps`, per-player
   `scriptedRecipes`, horde waves/enemies/recipes): null entries are cross-bundle references
@@ -396,21 +406,13 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   `hordeLevelConfig` and the horde types) exist only in 0.11.1's LevelEditorStub; resolve them
   by reflection (`ReadMember`/`ReadItems`) so the assembly still loads with 0.10/0.11, whose
   stub has only the campaign schema. Never reference those members directly — the released
-  1.9.8 did and failed to load on those two versions. On a null, entry waits only for the
-  dependency bundles the level actually references: the info bundle's and the scene bundle's
-  external CAB references
-  (`InfoBundleGraph.BundleReferences`) are mapped to bundle files through each bundle's
-  directory (`InfoBundleGraph.CabinetNames`), covering WLoader `commonW*` and DIYLevel
-  `common*`. Still-pending needed requests get priority 100 and a needed bundle nothing is
-  loading (a failed startup load) is requested on entry, so commons also heal here; the
-  remaining bundles keep loading in the background. Waits update the corner label
-  (`shared x/y z%`, percent from the pending requests' own progress) and end on the
+  1.9.8 did and failed to load on those two versions. Waits update the corner label
+  (`common asset files x/y z%`, percent from the pending requests' own progress) and end on the
   configured timeout (default 60 s) or a 20 s no-progress stall; a scan that cannot run
-  falls back to waiting for every shared pack, a scan that attributes no bundle waits for
-  none. Nulls then reload the info graph (`Sets` entry dropped, bundles `Unload(false)` and
-  reloaded) up to twice; persisting nulls fail with a message naming the null fields. The
-  synchronous `PrepareLevel` path validates the same fields but cannot wait. Failed takeover
-  files leave the wait list: a corrupt dependency is a reinstall case, not a wait case.
+  falls back to waiting for every known shared pack (`common0*` and `commonW*`), while a scan
+  that attributes no bundle waits for none. Persisting nulls after up to two info reloads fail
+  with a message naming the null fields. Failed background loads leave the wait list: a corrupt
+  dependency is a reinstall case, not a wait case.
 
 ## Selected level assets
 
@@ -630,7 +632,7 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
 ## Publishing rule
 
 Test builds append an incrementing fourth component to the latest approved release
-version. The approved release is `1.9.10`, so subsequent tests use `1.9.10.x`.
+version. The approved release is `1.9.11`, so subsequent tests use `1.9.11.x`.
 Changing the three-component release version requires the user's explicit approval.
 Keep historical test commits under their original test versions.
 `RELEASE_NOTES.md` lists approved releases only: fold each release's test-build
@@ -638,9 +640,9 @@ notes into its release section and never keep test (four-component) version
 sections in the file.
 
 Commit each version independently after implementation and relevant checks, before
-starting the next version. Do not include version numbers in commit subjects or bodies;
-describe the concrete change instead. Keep `PluginVersion` and the csproj version
-synchronized, and put version identifiers in plugin metadata, tags and release titles.
+starting the next version. Never include version numbers in commit subjects or bodies;
+describe the concrete change instead. Record release versions via git tags (`vX.Y.Z`,
+e.g. `v1.9.11`), synchronized `PluginVersion`/csproj metadata, and release titles.
 When rewording local history, leave commits already in `origin/master` unchanged.
 
 For approved GitHub release creation and asset uploads, use the token from this

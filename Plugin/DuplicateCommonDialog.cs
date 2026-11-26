@@ -150,6 +150,23 @@ namespace DIYLevelFastInit
             catch { }
         }
 
+        internal static bool TryGetPendingLoad(string bundleName, out AssetBundleCreateRequest request, out string loadedPath)
+        {
+            request = null;
+            loadedPath = null;
+            if (string.IsNullOrEmpty(bundleName)) return false;
+            PendingLoad pending;
+            if (!PendingLoads.TryGetValue(bundleName, out pending)) return false;
+            if (pending.Request == null || pending.Request.isDone)
+            {
+                PendingLoads.Remove(bundleName);
+                return false;
+            }
+            request = pending.Request;
+            loadedPath = pending.Path;
+            return true;
+        }
+
         internal static void RecordLoaded(string bundleName, string path)
         {
             if (!IsCommonBundleName(bundleName) || string.IsNullOrEmpty(path)) return;
@@ -165,13 +182,20 @@ namespace DIYLevelFastInit
             RecordDuplicate(bundleName, duplicatePath, loadedPath);
         }
 
-        private static void RecordDuplicate(string bundleName, string duplicatePath, string loadedPath)
+        internal static void RecordDuplicate(string bundleName, string duplicatePath, string loadedPath)
         {
             if (!IsCommonBundleName(bundleName)) return;
             string fullDuplicate = NormalizePath(duplicatePath);
             string fullLoaded = string.IsNullOrEmpty(loadedPath) ? null : NormalizePath(loadedPath);
             string key = bundleName + "\n" + (fullDuplicate ?? string.Empty);
             if (!RecordedKeys.Add(key)) return;
+            if (!string.IsNullOrEmpty(fullLoaded)
+                && string.Equals(fullLoaded, fullDuplicate, StringComparison.OrdinalIgnoreCase))
+            {
+                FastInitPlugin.Log.LogInfo("common bundle already loaded from same path [" + bundleName + "]: \""
+                    + fullDuplicate + "\"; skipping duplicate-file warning");
+                return;
+            }
 
             PendingEntries.Add(new DuplicateEntry(bundleName, fullLoaded, fullDuplicate));
             _showAfter = Time.unscaledTime + CoalesceSeconds;

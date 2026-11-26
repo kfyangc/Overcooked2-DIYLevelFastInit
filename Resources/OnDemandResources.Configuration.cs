@@ -52,6 +52,16 @@ namespace DIYLevelFastInit
             CancelPreview();
             ThumbnailCache.ClearMemory();
             ReleaseUnused();
+            List<FileInfo> files = FastInitHost.SafeGetFiles(new DirectoryInfo(path), "info*");
+            if (files.Count > 0)
+            {
+                HashSet<string> requiredBundles = InfoBundleGraph.Required(files[0].FullName, Path.Combine(path, scene));
+                HashSet<string> sharedBundles = WLoaderInterop.NeededBundles(requiredBundles, Path.Combine(path, scene));
+                WLoaderInterop.EnsureBundlesSync(sharedBundles);
+                LoadedSet cachedSet;
+                if (Sets.TryGetValue(path, out cachedSet) && cachedSet.SharedBundleRevision != WLoaderInterop.SettledRevision)
+                    DropCachedSet(path, requiredBundles);
+            }
             LoadSet(path, scene);
             LevelInfoSO full = Resolve(path, scene);
             // Synchronous entry path (client replay/direct callers): no wait window
@@ -60,7 +70,7 @@ namespace DIYLevelFastInit
             int unresolved = CountUnresolvedReferences(full, out unresolvedDetail);
             if (unresolved > 0)
                 throw new IOException("unresolved level references: " + scene + " (" + unresolvedDetail
-                    + "; shared web bundles " + WLoaderInterop.StateDescription() + ")");
+                    + "; shared bundles " + WLoaderInterop.StateDescription() + ")");
             SceneDirectoryData.SceneDirectoryEntry entry = PrepareSessionEntry(scene);
             entry.LoadScreenOverride = full.screenshot;
             foreach (SceneDirectoryData.PerPlayerCountDirectoryEntry variant in entry.SceneVarients) PrepareVariant(full, variant);

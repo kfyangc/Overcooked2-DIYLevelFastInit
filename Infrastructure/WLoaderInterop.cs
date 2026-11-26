@@ -24,24 +24,30 @@ namespace DIYLevelFastInit
         private static Harmony _harmony;
         private static string _loaderDir;
         private static FieldInfo _depStateField;
-        // Expected shared bundle names; compared case-insensitively at each use.
+        // Expected WLoader shared bundle names; compared case-insensitively at each use.
         private static readonly List<string> _names = new List<string>();
         private static bool _namesRead;
+        // Total shared bundles (DIYLevel common* + WLoader commonW*) scheduled in the parallel batch.
+        private static int _expectedCount;
+        // Incremented whenever a shared bundle newly settles so cached preview sets reload fresh.
+        internal static int SettledRevision { get; private set; }
         // Names that finished loading, failed to load, or were already resident.
         private static readonly HashSet<string> _settled = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        // The takeover loading pass in LoadHeavy finished (all names settled).
+        // The parallel loading pass in LoadHeavy finished (all scheduled bundles settled).
         private static bool _drained;
-        // Live takeover requests by bundle name; entry raises the priority of a level's ones.
+        // Live parallel background requests by bundle name; entry raises the priority of a level's ones.
         private static readonly Dictionary<string, AssetBundleCreateRequest> _takeoverLoads =
             new Dictionary<string, AssetBundleCreateRequest>(StringComparer.OrdinalIgnoreCase);
-        // Entry-driven loads for needed bundles nothing else is loading (a failed startup
-        // load); completion marks them settled either way.
+        // Entry-driven loads for needed bundles nothing else is loading (a failed or
+        // unscheduled startup load); completion marks them settled either way.
         private static readonly Dictionary<string, AssetBundleCreateRequest> _healLoads =
             new Dictionary<string, AssetBundleCreateRequest>(StringComparer.OrdinalIgnoreCase);
         private static readonly HashSet<string> _healed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        // External CAB name -> dependency bundle file (WLoader commonW* and DIYLevel common*).
+        // External CAB name -> normalized dependency bundle file (WLoader commonW* and DIYLevel common*).
         private static readonly Dictionary<string, string> _cabBundles =
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // Bundles whose headers could not be indexed; conservatively included in NeededBundles.
+        private static readonly List<string> _unindexedBundles = new List<string>();
         private static bool _cabsIndexed;
 
         internal static void TryInstall()
@@ -97,6 +103,54 @@ namespace DIYLevelFastInit
             return true;
         }
 
+        // True when path is one of the web loader's own commonW<digits> files (same
+        // directory as Loader.dll). When WLoader is installed inside OC2DIYLevel/,
+        // FastInitHost skips these files in its serial common* loop so WLoaderInterop
+        // (or WLoader itself when takeover is disabled) owns them without stalling
+        // catalog startup or triggering false duplicate-bundle warnings.
+        internal static bool OwnsSharedBundle(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return false;
+            if (!IsCommonWName(Path.GetFileName(path))) return false;
+            string loaderDir = ResolveLoadedLoaderDir();
+            if (string.IsNullOrEmpty(loaderDir)) return false;
+            return string.Equals(NormalizeDir(Path.GetDirectoryName(path)), NormalizeDir(loaderDir),
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        // Inspects only already-loaded assemblies so calling this when takeover is off
+        // never triggers an early Assembly.LoadFrom side effect.
+        private static string ResolveLoadedLoaderDir()
+        {
+            if (!string.IsNullOrEmpty(_loaderDir)) return _loaderDir;
+            foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                Type match = FindLoaderTypeIn(assembly);
+                if (match == null) continue;
+                try
+                {
+                    string dir = Path.GetDirectoryName(match.Assembly.Location);
+                    if (!string.IsNullOrEmpty(dir))
+                    {
+                        _loaderDir = dir;
+                        return _loaderDir;
+                    }
+                }
+                catch { }
+            }
+            return null;
+        }
+
+        private static string NormalizeDir(string path)
+        {
+            if (string.IsNullOrEmpty(path)) return string.Empty;
+            try
+            {
+                return Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            }
+            catch { return path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar); }
+        }
+
         private static Type FindLoaderType()
         {
             foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
@@ -139,97 +193,173 @@ namespace DIYLevelFastInit
                 yield return Path.Combine(dir.FullName, "Loader.dll");
         }
 
-        internal static IEnumerator LoadSharedBundles()
+        private static string NormalizePath(string path)
         {
-            if (_mode == Mode.Off) yield break;
-            CollectNames();
-            if (_names.Count == 0)
+            if (string.IsNullOrEmpty(path)) return string.Empty;
+            try { return Path.GetFullPath(path); }
+            catch { return path; }
+        }
+
+        private static void MarkSettled(string name)
+        {
+            if (_settled.Add(name)) SettledRevision++;
+        }
+
+        // Loads DIYLevel common* (excluding "common") and taken-over WLoader commonW*
+        // bundles concurrently in the same frame with equal priority, reaping each
+        // request as soon as it completes so catalog publication never blocks on them.
+        internal static IEnumerator LoadSharedBundles(string diyPluginDir)
+        {
+            List<FileInfo> batch = new List<FileInfo>();
+            Dictionary<string, string> queuedByName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            int wloaderFiles = 0, diyFiles = 0, skipped = 0;
+
+            if (_mode != Mode.Off)
             {
-                _mode = Mode.Off;
+                CollectNames();
+                if (_names.Count == 0)
+                {
+                    _mode = Mode.Off;
+                }
+                else if (_mode == Mode.Takeover)
+                {
+                    int state = ReadDepState();
+                    if (state == 0)
+                    {
+                        // The web loader never activated its dependency pipeline (no web-exported
+                        // sets); release the suppression so a later activation still loads alone.
+                        Release("web loader dependency pipeline not active");
+                    }
+                    else
+                    {
+                        foreach (FileInfo file in SharedFiles())
+                        {
+                            string full = NormalizePath(file.FullName);
+                            if (queuedByName.ContainsKey(file.Name)) continue;
+                            queuedByName[file.Name] = full;
+                            batch.Add(file);
+                            wloaderFiles++;
+                        }
+                    }
+                }
+            }
+
+            if (!string.IsNullOrEmpty(diyPluginDir))
+            {
+                List<FileInfo> diyCommon = FastInitHost.SafeGetFiles(new DirectoryInfo(diyPluginDir), "common*");
+                diyCommon.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+                foreach (FileInfo file in diyCommon)
+                {
+                    if (string.Equals(file.Name, "common", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (OwnsSharedBundle(file.FullName)) continue;
+                    string full = NormalizePath(file.FullName);
+                    string existing;
+                    if (queuedByName.TryGetValue(file.Name, out existing))
+                    {
+                        skipped++;
+                        DuplicateCommonDialog.RecordDuplicate(file.Name, full, existing);
+                        FastInitPlugin.Log.LogInfo("skip " + file.Name + ": duplicate of " + existing);
+                        continue;
+                    }
+                    queuedByName[file.Name] = full;
+                    batch.Add(file);
+                    diyFiles++;
+                }
+            }
+
+            _expectedCount = batch.Count;
+            if (batch.Count == 0)
+            {
+                _drained = true;
                 yield break;
             }
-            if (_mode != Mode.Takeover) yield break; // observing: names only serve the wait
-            int state = ReadDepState();
-            if (state == 0)
-            {
-                // The web loader never activated its dependency pipeline (no web-exported
-                // sets); release the suppression so a later activation still loads alone.
-                Release("web loader dependency pipeline not active");
-                yield break;
-            }
-            List<FileInfo> files = new List<FileInfo>(SharedFiles());
-            int skipped = 0;
+
             List<FileInfo> pending = new List<FileInfo>();
             List<AssetBundleCreateRequest> requests = new List<AssetBundleCreateRequest>();
-            FastInitPlugin.Log.LogInfo("WLoader shared bundles takeover: " + files.Count
-                + " files (parallel) from " + _loaderDir);
-            foreach (FileInfo file in files)
+            FastInitPlugin.Log.LogInfo("shared dependency bundles: " + batch.Count
+                + " files (parallel: " + diyFiles + " DIYLevel, " + wloaderFiles + " WLoader)");
+            foreach (FileInfo file in batch)
             {
-                // Other loaders can finish a bundle while the preceding request is pending.
+                // Other loaders can finish a bundle before or during dispatch.
                 if (IsResident(file.Name))
                 {
                     skipped++;
-                    _settled.Add(file.Name);
+                    MarkSettled(file.Name);
                     DuplicateCommonDialog.RecordDuplicate(file.Name, file.FullName);
                     FastInitPlugin.Log.LogInfo("skip " + file.Name + ": already loaded by another plugin");
+                    continue;
+                }
+                if (_healLoads.ContainsKey(file.Name)) continue;
+                AssetBundleCreateRequest extRequest;
+                string extPath;
+                if (DuplicateCommonDialog.TryGetPendingLoad(file.Name, out extRequest, out extPath))
+                {
+                    skipped++;
+                    DuplicateCommonDialog.RecordDuplicate(file.Name, file.FullName, extPath);
+                    FastInitPlugin.Log.LogInfo("skip " + file.Name + ": already loading by another plugin");
                     continue;
                 }
                 AssetBundleCreateRequest request;
                 try { request = AssetBundle.LoadFromFileAsync(file.FullName); }
                 catch (Exception e)
                 {
-                    FastInitPlugin.Log.LogWarning("WLoader shared bundle request failed [" + file.Name + "]: " + e.Message);
+                    FastInitPlugin.Log.LogWarning("shared bundle request failed [" + file.Name + "]: " + e.Message);
                     request = null;
                 }
                 if (request == null)
                 {
-                    _settled.Add(file.Name);
+                    MarkSettled(file.Name);
                     continue;
                 }
                 _takeoverLoads[file.Name] = request;
                 requests.Add(request);
                 pending.Add(file);
             }
+
             float started = Time.realtimeSinceStartup;
             float nextNotice = started + 15f;
-            while (true)
+            bool[] reaped = new bool[requests.Count];
+            int remaining = requests.Count;
+            int loaded = 0, failed = 0;
+            while (remaining > 0)
             {
-                bool allDone = true;
                 for (int i = 0; i < requests.Count; i++)
-                    if (!requests[i].isDone) { allDone = false; break; }
-                if (allDone) break;
+                {
+                    if (reaped[i] || !requests[i].isDone) continue;
+                    reaped[i] = true;
+                    remaining--;
+                    FileInfo file = pending[i];
+                    _takeoverLoads.Remove(file.Name);
+                    AssetBundle bundle = requests[i].assetBundle;
+                    if (bundle == null)
+                    {
+                        // Completed failed requests can safely fall back to a sync load.
+                        try { bundle = AssetBundle.LoadFromFile(file.FullName); }
+                        catch (Exception e) { FastInitPlugin.Log.LogWarning("shared bundle sync retry failed [" + file.Name + "]: " + e.Message); }
+                    }
+                    if (bundle != null)
+                    {
+                        loaded++;
+                        DuplicateCommonDialog.RecordLoaded(file.Name, file.FullName);
+                    }
+                    else failed++;
+                    // Failed files leave the wait list too: a corrupt dependency cannot be
+                    // fixed by waiting, and the recipe validation reports it precisely.
+                    MarkSettled(file.Name);
+                    FastInitPlugin.Log.LogInfo("shared bundle settled [" + file.Name + "]: "
+                        + (int)((Time.realtimeSinceStartup - started) * 1000) + " ms, loaded=" + (bundle != null));
+                }
+                if (remaining == 0) break;
                 if (Time.realtimeSinceStartup >= nextNotice)
                 {
-                    FastInitPlugin.Log.LogWarning("WLoader shared bundles still pending after "
-                        + (int)(Time.realtimeSinceStartup - started) + "s; waiting without duplicate requests");
+                    FastInitPlugin.Log.LogWarning("shared dependency bundles still pending after "
+                        + (int)(Time.realtimeSinceStartup - started) + "s (" + remaining + " left); waiting without duplicate requests");
                     nextNotice += 15f;
                 }
                 yield return null;
             }
-            int loaded = 0, failed = 0;
-            for (int i = 0; i < requests.Count; i++)
-            {
-                _takeoverLoads.Remove(pending[i].Name);
-                AssetBundle bundle = requests[i].assetBundle;
-                if (bundle == null)
-                {
-                    // Completed failed requests can safely fall back to a sync load.
-                    try { bundle = AssetBundle.LoadFromFile(pending[i].FullName); }
-                    catch (Exception e) { FastInitPlugin.Log.LogWarning("WLoader shared bundle sync retry failed [" + pending[i].Name + "]: " + e.Message); }
-                }
-                if (bundle != null)
-                {
-                    loaded++;
-                    DuplicateCommonDialog.RecordLoaded(pending[i].Name, pending[i].FullName);
-                }
-                else failed++;
-                // Failed files leave the wait list too: a corrupt dependency cannot be
-                // fixed by waiting, and the recipe validation reports it precisely.
-                _settled.Add(pending[i].Name);
-                FastInitPlugin.Log.LogInfo("WLoader shared bundle settled [" + pending[i].Name + "]: loaded=" + (bundle != null));
-            }
             _drained = true;
-            FastInitPlugin.Log.LogInfo("WLoader shared bundles: " + loaded + " loaded, " + skipped + " skipped (dup), "
+            FastInitPlugin.Log.LogInfo("shared dependency bundles: " + loaded + " loaded, " + skipped + " skipped (dup), "
                 + failed + " failed (" + (int)((Time.realtimeSinceStartup - started) * 1000) + " ms)");
         }
 
@@ -237,88 +367,164 @@ namespace DIYLevelFastInit
         // concurrently and whichever pack a level needs is already under way.
         private static IEnumerable<FileInfo> SharedFiles()
         {
-            List<FileInfo> files = FastInitHost.SafeGetFiles(new DirectoryInfo(_loaderDir), "commonW*");
+            List<FileInfo> files = new List<FileInfo>();
+            foreach (FileInfo file in FastInitHost.SafeGetFiles(new DirectoryInfo(_loaderDir), "commonW*"))
+                if (IsCommonWName(file.Name)) files.Add(file);
             files.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
             return files;
         }
 
         private static void CollectNames()
         {
-            if (_namesRead || _loaderDir == null) return;
+            if (_namesRead) return;
+            string loaderDir = ResolveLoadedLoaderDir();
+            if (string.IsNullOrEmpty(loaderDir)) return;
             _namesRead = true;
-            foreach (FileInfo file in FastInitHost.SafeGetFiles(new DirectoryInfo(_loaderDir), "commonW*"))
-                _names.Add(file.Name);
+            foreach (FileInfo file in FastInitHost.SafeGetFiles(new DirectoryInfo(loaderDir), "commonW*"))
+                if (IsCommonWName(file.Name)) _names.Add(file.Name);
         }
 
-        // The dependency bundles a level actually references: its info asset (recipes,
-        // include lists, optional items, ingredients, steps) and its scene bundle both
-        // point at bundle CABs through external references. WLoader's commonW* packs load
-        // in the background and are the usual race; DIYLevel's common01..04 and
-        // common*_textures are preloaded before the catalog publishes, so they appear here
-        // only when a startup load failed and entry has to heal them. Falls back to every
-        // commonW* pack when the reference scan is unavailable.
-        internal static HashSet<string> NeededBundles(string infoFile, string sceneFile)
+        // Transitive closure of shared dependency bundles (DIYLevel common0* and WLoader
+        // commonW*) referenced by a level's info bundles, cross-set info dependencies,
+        // scene bundle, and any shared bundle -> shared bundle edges (e.g. common03 ->
+        // common01 -> common01_textures, commonW3 -> commonW1 -> commonW2). Falls back
+        // to every known shared pack when the reference scan is unavailable.
+        internal static HashSet<string> NeededBundles(IEnumerable<string> seedBundles, string sceneFile)
         {
-            HashSet<string> bundles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            HashSet<string> needed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             if (!IndexBundleCabinets()) return AllSharedPacks();
+            HashSet<string> visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            Queue<string> queue = new Queue<string>();
+            if (seedBundles != null)
+            {
+                foreach (string seed in seedBundles)
+                {
+                    if (string.IsNullOrEmpty(seed) || !File.Exists(seed)) continue;
+                    string full = NormalizePath(seed);
+                    if (visited.Add(full)) queue.Enqueue(full);
+                }
+            }
+            if (!string.IsNullOrEmpty(sceneFile) && File.Exists(sceneFile))
+            {
+                string fullScene = NormalizePath(sceneFile);
+                if (visited.Add(fullScene)) queue.Enqueue(fullScene);
+            }
             try
             {
-                foreach (string cabinet in InfoBundleGraph.BundleReferences(infoFile)) AddBundle(cabinet, bundles);
-                if (sceneFile != null && File.Exists(sceneFile))
-                    foreach (string cabinet in InfoBundleGraph.BundleReferences(sceneFile)) AddBundle(cabinet, bundles);
+                while (queue.Count != 0)
+                {
+                    string current = queue.Dequeue();
+                    foreach (string cabinet in InfoBundleGraph.BundleReferences(current))
+                    {
+                        string target;
+                        if (cabinet == null || !_cabBundles.TryGetValue(cabinet, out target)) continue;
+                        if (needed.Add(target) && visited.Add(target))
+                            queue.Enqueue(target);
+                    }
+                }
             }
             catch (Exception e)
             {
                 FastInitPlugin.Log.LogWarning("dependency bundle reference scan unavailable; waiting for every shared pack: " + e.Message);
                 return AllSharedPacks();
             }
-            // A successful scan that attributes nothing means this level references no
-            // dependency bundle: waiting cannot resolve it, so the reload decides.
-            return bundles;
-        }
-
-        private static void AddBundle(string cabinet, HashSet<string> bundles)
-        {
-            string path;
-            if (cabinet != null && _cabBundles.TryGetValue(cabinet, out path)) bundles.Add(path);
+            // Conservatively include any shared bundle whose own directory table could not be indexed.
+            for (int i = 0; i < _unindexedBundles.Count; i++) needed.Add(_unindexedBundles[i]);
+            return needed;
         }
 
         private static HashSet<string> AllSharedPacks()
         {
             CollectNames();
             HashSet<string> paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            HashSet<string> seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             if (_loaderDir != null)
-                foreach (string name in _names) paths.Add(Path.Combine(_loaderDir, name));
+            {
+                foreach (string name in _names)
+                {
+                    string full = NormalizePath(Path.Combine(_loaderDir, name));
+                    if (seenNames.Add(name)) paths.Add(full);
+                }
+            }
+            string diy = FastInitPlugin.GetDiyPluginDir();
+            if (!string.IsNullOrEmpty(diy))
+            {
+                foreach (FileInfo file in FastInitHost.SafeGetFiles(new DirectoryInfo(diy), "common*"))
+                {
+                    if (string.Equals(file.Name, "common", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (seenNames.Add(file.Name)) paths.Add(NormalizePath(file.FullName));
+                }
+            }
             return paths;
         }
 
-        // Reads each dependency bundle's directory once. A bundle whose header cannot be
-        // read is never attributed, and NeededBundles falls back to every shared pack.
+        // Reads each dependency bundle's directory once. WLoader packs are indexed first so
+        // cross-directory duplicates attribute to WLoader's authoritative copy.
         private static bool IndexBundleCabinets()
         {
             if (_cabsIndexed) return _cabBundles.Count != 0;
             _cabsIndexed = true;
+            HashSet<string> indexedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            HashSet<string> indexedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             CollectNames();
             if (_loaderDir != null)
-                foreach (string name in _names) IndexCabinets(Path.Combine(_loaderDir, name));
+                foreach (string name in _names) IndexCabinets(Path.Combine(_loaderDir, name), indexedPaths, indexedNames);
             string diy = FastInitPlugin.GetDiyPluginDir();
             if (!string.IsNullOrEmpty(diy))
                 foreach (FileInfo file in FastInitHost.SafeGetFiles(new DirectoryInfo(diy), "common*"))
                     if (!string.Equals(file.Name, "common", StringComparison.OrdinalIgnoreCase))
-                        IndexCabinets(file.FullName);
+                        IndexCabinets(file.FullName, indexedPaths, indexedNames);
             return _cabBundles.Count != 0;
         }
 
-        private static void IndexCabinets(string path)
+        private static void IndexCabinets(string path, HashSet<string> indexedPaths, HashSet<string> indexedNames)
         {
+            string normalized = NormalizePath(path);
+            string name = Path.GetFileName(normalized);
+            if (!indexedPaths.Add(normalized) || !indexedNames.Add(name)) return;
             try
             {
-                foreach (string cabinet in InfoBundleGraph.CabinetNames(path))
-                    _cabBundles[cabinet] = path;
+                foreach (string cabinet in InfoBundleGraph.CabinetNames(normalized))
+                    if (!_cabBundles.ContainsKey(cabinet)) _cabBundles[cabinet] = normalized;
             }
             catch (Exception e)
             {
-                FastInitPlugin.Log.LogWarning("dependency bundle index unavailable [" + Path.GetFileName(path) + "]: " + e.Message);
+                _unindexedBundles.Add(normalized);
+                FastInitPlugin.Log.LogWarning("dependency bundle index unavailable [" + name + "]: " + e.Message);
+            }
+        }
+
+        internal static bool AllSettled(HashSet<string> bundles)
+        {
+            return bundles == null || bundles.Count == 0 || Settled(bundles);
+        }
+
+        // Synchronous fallback entry path: joins any in-flight async request for each
+        // needed shared bundle without starting a duplicate load, or loads missing ones.
+        internal static void EnsureBundlesSync(HashSet<string> bundles)
+        {
+            if (bundles == null || bundles.Count == 0) return;
+            foreach (string path in bundles)
+            {
+                string name = Path.GetFileName(path);
+                if (IsSettled(name)) continue;
+                AssetBundle bundle = null;
+                AssetBundleCreateRequest request;
+                string extPath;
+                if (_takeoverLoads.TryGetValue(name, out request)
+                    || _healLoads.TryGetValue(name, out request)
+                    || DuplicateCommonDialog.TryGetPendingLoad(name, out request, out extPath))
+                {
+                    try { bundle = request.assetBundle; }
+                    catch (Exception e) { FastInitPlugin.Log.LogWarning("sync join for shared bundle failed [" + name + "]: " + e.Message); }
+                }
+                if (bundle == null && !IsResident(name))
+                {
+                    try { bundle = AssetBundle.LoadFromFile(path); }
+                    catch (Exception e) { FastInitPlugin.Log.LogWarning("sync load for shared bundle failed [" + name + "]: " + e.Message); }
+                }
+                if (bundle != null) DuplicateCommonDialog.RecordLoaded(name, path);
+                MarkSettled(name);
             }
         }
 
@@ -336,11 +542,9 @@ namespace DIYLevelFastInit
 
         // Waits until the needed bundles settle, the configured timeout elapses, or their
         // loading progress stops moving. Still-pending needed requests get their priority
-        // raised first, and a needed bundle nothing is loading (a failed startup load) is
-        // requested here, so entering a level pushes exactly its own bundles ahead of the
-        // rest. progress receives the settled count and the average progress of the
-        // pending requests, keeping the corner label moving instead of looking frozen.
-        internal static IEnumerator AwaitBundles(HashSet<string> bundles, Action<int, float> progress)
+        // raised first, and a needed bundle nothing is loading is requested immediately,
+        // so entering a level pushes exactly its own bundles ahead of the rest.
+        internal static IEnumerator AwaitBundles(HashSet<string> bundles, Action<int, float> progress, Func<bool> current)
         {
             if (bundles == null || bundles.Count == 0) yield break;
             ReapHealLoads(bundles);
@@ -358,6 +562,7 @@ namespace DIYLevelFastInit
             if (progress != null) progress(settled, fraction);
             while (!Settled(bundles))
             {
+                if (current != null && !current()) yield break;
                 ReapHealLoads(bundles);
                 int nowSettled = SettledCount(bundles);
                 float nowFraction = PendingFraction(bundles);
@@ -404,7 +609,18 @@ namespace DIYLevelFastInit
             foreach (string path in bundles)
             {
                 string name = Path.GetFileName(path);
-                if (Boost(_takeoverLoads, name) || Boost(_healLoads, name)) boosted++;
+                if (Boost(_takeoverLoads, name) || Boost(_healLoads, name))
+                {
+                    boosted++;
+                    continue;
+                }
+                AssetBundleCreateRequest extRequest;
+                string extPath;
+                if (DuplicateCommonDialog.TryGetPendingLoad(name, out extRequest, out extPath))
+                {
+                    extRequest.priority = 100;
+                    boosted++;
+                }
             }
             return boosted;
         }
@@ -417,19 +633,27 @@ namespace DIYLevelFastInit
             return true;
         }
 
-        // Requests a needed bundle nothing is loading (a DIYLevel common bundle whose
-        // startup load failed, for example); it stays resident for the session.
+        // Requests a needed bundle nothing is loading (an unscheduled or failed startup
+        // load, for example); it stays resident for the session.
         private static int RequestMissing(HashSet<string> bundles)
         {
             int requested = 0;
             foreach (string path in bundles)
             {
                 string name = Path.GetFileName(path);
-                if (IsSettled(name) || _takeoverLoads.ContainsKey(name) || _healLoads.ContainsKey(name)) continue;
+                AssetBundleCreateRequest extRequest;
+                string extPath;
+                if (IsSettled(name) || _takeoverLoads.ContainsKey(name) || _healLoads.ContainsKey(name)
+                    || DuplicateCommonDialog.TryGetPendingLoad(name, out extRequest, out extPath)) continue;
                 try
                 {
-                    _healLoads[name] = AssetBundle.LoadFromFileAsync(path);
-                    requested++;
+                    AssetBundleCreateRequest request = AssetBundle.LoadFromFileAsync(path);
+                    if (request != null)
+                    {
+                        request.priority = 100;
+                        _healLoads[name] = request;
+                        requested++;
+                    }
                 }
                 catch (Exception e)
                 {
@@ -448,7 +672,8 @@ namespace DIYLevelFastInit
                 if (!_healLoads.TryGetValue(name, out request) || !request.isDone) continue;
                 _healLoads.Remove(name);
                 AssetBundle bundle = request.assetBundle;
-                _healed.Add(name);
+                if (bundle != null) DuplicateCommonDialog.RecordLoaded(name, path);
+                if (_healed.Add(name)) SettledRevision++;
                 FastInitPlugin.Log.LogInfo("dependency bundle loaded for entry [" + name + "]: loaded=" + (bundle != null));
             }
         }
@@ -461,18 +686,26 @@ namespace DIYLevelFastInit
             foreach (string path in bundles)
             {
                 string name = Path.GetFileName(path);
-                AddFraction(_takeoverLoads, name, ref sum, ref count);
-                AddFraction(_healLoads, name, ref sum, ref count);
+                if (AddFraction(_takeoverLoads, name, ref sum, ref count)) continue;
+                if (AddFraction(_healLoads, name, ref sum, ref count)) continue;
+                AssetBundleCreateRequest extRequest;
+                string extPath;
+                if (DuplicateCommonDialog.TryGetPendingLoad(name, out extRequest, out extPath))
+                {
+                    sum += extRequest.progress;
+                    count++;
+                }
             }
             return count == 0 ? 0f : sum / count;
         }
 
-        private static void AddFraction(Dictionary<string, AssetBundleCreateRequest> loads, string name, ref float sum, ref int count)
+        private static bool AddFraction(Dictionary<string, AssetBundleCreateRequest> loads, string name, ref float sum, ref int count)
         {
             AssetBundleCreateRequest request;
-            if (!loads.TryGetValue(name, out request) || request.isDone) return;
+            if (!loads.TryGetValue(name, out request) || request.isDone) return false;
             sum += request.progress;
             count++;
+            return true;
         }
 
         private static bool Settled(HashSet<string> bundles)
@@ -512,10 +745,10 @@ namespace DIYLevelFastInit
 
         internal static string StateDescription()
         {
-            if (_mode == Mode.Off) return "inactive";
-            if (_mode == Mode.Takeover) return "takeover " + (_drained ? "settled" : "pending")
-                + " (" + _settled.Count + "/" + _names.Count + " files)";
-            return "observing " + ResidentCount() + "/" + _names.Count + " resident";
+            string shared = (_drained ? "settled" : "pending") + " (" + _settled.Count + "/" + _expectedCount + " files)";
+            if (_mode == Mode.Observe)
+                return shared + "; WLoader observing " + ResidentCount() + "/" + _names.Count + " resident";
+            return shared;
         }
 
         private static int ReadDepState()

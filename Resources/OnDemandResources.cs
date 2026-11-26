@@ -25,6 +25,7 @@ namespace DIYLevelFastInit
             internal LevelAssetIndex AssetIndex;
             internal bool AssetNamesRead;
             internal readonly HashSet<string> InvalidAssets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            internal int SharedBundleRevision = WLoaderInterop.SettledRevision;
         }
 
         private sealed class LevelResources

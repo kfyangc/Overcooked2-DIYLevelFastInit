@@ -220,6 +220,30 @@ namespace DIYLevelFastInit
             HashSet<string> requiredBundles = InfoBundleGraph.Required(files[0].FullName, Path.Combine(path, scene));
             if (client) _clientPreparingBundles = requiredBundles;
             else _preparingBundles = requiredBundles;
+            // Ensure every shared dependency bundle (common0* and commonW*, including
+            // transitive bundle -> bundle references) needed by the info bundles and
+            // scene is resident BEFORE opening info_* or loading LevelInfoSO, covering
+            // both recipe and scene-only material/texture dependencies on slow machines.
+            HashSet<string> sharedBundles = WLoaderInterop.NeededBundles(requiredBundles, Path.Combine(path, scene));
+            bool waitedShared = false;
+            if (!WLoaderInterop.AllSettled(sharedBundles))
+            {
+                waitedShared = true;
+                FastInitPlugin.Log.LogInfo(context + "level dependency bundles: " + scene + " -> "
+                    + WLoaderInterop.DescribeBundles(sharedBundles));
+                yield return WLoaderInterop.AwaitBundles(sharedBundles, (settled, fraction) =>
+                    LevelLoadProgress = context + (fraction > 0.01f
+                        ? "common asset files " + settled + "/" + sharedBundles.Count + " " + (int)(fraction * 100f) + "%"
+                        : "common asset files " + settled + "/" + sharedBundles.Count),
+                    current);
+                if (!current()) yield break;
+            }
+            LoadedSet cachedSet;
+            if (Sets.TryGetValue(path, out cachedSet)
+                && (waitedShared || cachedSet.SharedBundleRevision != WLoaderInterop.SettledRevision))
+            {
+                DropCachedSet(path, requiredBundles);
+            }
             foreach (string required in requiredBundles)
             {
                 if (!current()) yield break;
@@ -285,19 +309,20 @@ namespace DIYLevelFastInit
             string detail;
             int unresolved = CountUnresolvedReferences(full.Value, out detail);
             if (unresolved == 0) yield break;
-            // Only the dependency bundles this level's info and scene reference must be
-            // resident before setup and scene loading; unrelated bundles keep loading in
-            // the background instead of blocking entry.
-            HashSet<string> bundles = WLoaderInterop.NeededBundles(infoFile, Path.Combine(path, scene));
+            // Only the dependency bundles this level's info and scene reference (transitively)
+            // must be resident before setup and scene loading; unrelated bundles keep loading
+            // in the background instead of blocking entry.
+            HashSet<string> bundles = WLoaderInterop.NeededBundles(requiredBundles, Path.Combine(path, scene));
             FastInitPlugin.Log.LogWarning("level references unresolved: " + scene + " (" + detail
-                + "; shared web bundles " + WLoaderInterop.StateDescription() + ")");
+                + "; shared bundles " + WLoaderInterop.StateDescription() + ")");
             FastInitPlugin.Log.LogInfo("level dependency bundles: " + scene + " -> " + WLoaderInterop.DescribeBundles(bundles));
             // Keep the corner label moving while waiting so the entry never looks frozen.
             // The corner label sizes itself to its text, so the wording is unconstrained.
             yield return WLoaderInterop.AwaitBundles(bundles, (settled, fraction) =>
                 LevelLoadProgress = fraction > 0.01f
                     ? "common asset files " + settled + "/" + bundles.Count + " " + (int)(fraction * 100f) + "%"
-                    : "common asset files " + settled + "/" + bundles.Count);
+                    : "common asset files " + settled + "/" + bundles.Count,
+                current);
             if (!current()) yield break;
             for (int attempt = 1; attempt <= 2 && CountUnresolvedReferences(full.Value) > 0; attempt++)
             {
@@ -310,13 +335,11 @@ namespace DIYLevelFastInit
             unresolved = CountUnresolvedReferences(full.Value, out detail);
             if (unresolved > 0)
                 throw new IOException("unresolved level references: " + scene + " (" + detail
-                    + "; shared web bundles " + WLoaderInterop.StateDescription()
-                    + ", reinstall the web dependency pack if this repeats)");
+                    + "; shared bundles " + WLoaderInterop.StateDescription()
+                    + ", reinstall the dependency pack if this repeats)");
         }
 
-        // Drops the cached set and closes its bundles, then repeats the async container
-        // and LevelInfo requests; a fresh bundle load re-resolves external references.
-        private static IEnumerator ReloadLevelInfo(string path, string scene, HashSet<string> requiredBundles, Func<bool> current)
+        private static void DropCachedSet(string path, HashSet<string> requiredBundles)
         {
             Sets.Remove(path);
             foreach (string required in new List<string>(requiredBundles))
@@ -330,6 +353,13 @@ namespace DIYLevelFastInit
                 catch (Exception e) { FastInitPlugin.Log.LogWarning("unloading " + Path.GetFileName(required) + ": " + e.Message); }
                 ReleaseInfoBundleLease(required);
             }
+        }
+
+        // Drops the cached set and closes its bundles, then repeats the async container
+        // and LevelInfo requests; a fresh bundle load re-resolves external references.
+        private static IEnumerator ReloadLevelInfo(string path, string scene, HashSet<string> requiredBundles, Func<bool> current)
+        {
+            DropCachedSet(path, requiredBundles);
             foreach (string required in requiredBundles)
             {
                 yield return EnsureInfoBundleAsync(required, 10);

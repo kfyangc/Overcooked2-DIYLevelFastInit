@@ -161,51 +161,14 @@ namespace DIYLevelFastInit
             try
             {
                 FastInitPlugin.Log.LogInfo("LoadHeavy started");
-                // Plugins like WLoader may already keep commonW1/commonW2 resident in memory;
-                // skipping them saves the 1-2 seconds of reading the whole file just to be
-                // rejected as a duplicate by Unity.
+                // Load DIYLevel common* (excluding "common") and WLoader commonW* shared
+                // dependency bundles concurrently on a background coroutine with equal
+                // priority so catalog publication is never blocked; level entry computes
+                // each level's transitive dependency closure and prioritizes/awaits only
+                // the bundles that level needs (WLoaderInterop).
                 System.Diagnostics.Stopwatch phase = System.Diagnostics.Stopwatch.StartNew();
-                int loaded = 0, skipped = 0, failed = 0;
-                foreach (FileInfo file in SafeGetFiles(new DirectoryInfo(pluginDir), "common*"))
-                {
-                    if (string.Equals(file.Name, "common", StringComparison.OrdinalIgnoreCase))
-                    {
-                        continue;
-                    }
-                    bool resident = false;
-                    // Other loaders can finish a bundle while the preceding request is pending.
-                    foreach (AssetBundle ab in AssetBundle.GetAllLoadedAssetBundles())
-                        if (string.Equals(ab.name, file.Name, StringComparison.OrdinalIgnoreCase)) { resident = true; break; }
-                    if (resident)
-                    {
-                        skipped++;
-                        DuplicateCommonDialog.RecordDuplicate(file.Name, file.FullName);
-                        FastInitPlugin.Log.LogInfo("skip " + file.Name + ": already loaded by another plugin");
-                        continue;
-                    }
-                    Box<AssetBundle> done = new Box<AssetBundle>();
-                    double started = phase.Elapsed.TotalMilliseconds;
-                    yield return LoadBundleFile(file.FullName, file.Name, done);
-                    if (done.Value != null)
-                    {
-                        loaded++;
-                        DuplicateCommonDialog.RecordLoaded(file.Name, file.FullName);
-                    }
-                    else
-                    {
-                        failed++;
-                    }
-                    FastInitPlugin.Log.LogInfo("common bundle timing [" + file.Name + "]: "
-                        + StartupTimings.Ms(phase.Elapsed.TotalMilliseconds - started) + " ms, loaded=" + (done.Value != null));
-                }
+                StartCoroutine(Guard(WLoaderInterop.LoadSharedBundles(pluginDir), "shared dependency bundles"));
                 commonMs = phase.Elapsed.TotalMilliseconds;
-                FastInitPlugin.Log.LogInfo("common bundles: " + loaded + " loaded, " + skipped + " skipped (dup), " + failed + " failed");
-
-                // The web loader's shared commonW* bundles carry cross-bundle recipe
-                // references. Load them on a parallel coroutine (concurrent requests) so
-                // catalog publication is never blocked on them; level preparation gates
-                // on their settle state instead (WLoaderInterop).
-                StartCoroutine(Guard(WLoaderInterop.LoadSharedBundles(), "WLoader shared bundle takeover"));
 
                 phase.Reset();
                 phase.Start();

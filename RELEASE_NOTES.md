@@ -1,3 +1,21 @@
+# 1.9.11
+
+## 中文
+
+统一 `common0*` 与 `commonW*` 共享依赖包的后台并行加载与进图前传递依赖门禁，并修复将 `OC2DIYLevelRuntimeWLoader` 混装在 `OC2DIYLevel` 同目录时误报重复资源包的问题。
+
+- **`common0*` 与 `commonW*` 同优先级后台并行加载**：启动仅同步加载必需的 `common`（封面与模板），其余 DIYLevel `common01..04`/`common01_textures` 与接管的 WLoader `commonW*` 统一在同一帧以相同优先级在后台并行加载，不再串行阻塞关卡集目录发布；每个包加载完成后立即单独结算。
+- **进图前完整传递依赖门禁**：进入关卡（房主/单人异步准备、客机异步准备及同步回退路径）打开 `info_*` 之前，先解析关卡的 `info_*`、跨集 `info_*` 依赖、场景包 `s_*` 以及共享包之间的传递依赖闭包（例如 `common02/03/04 -> common01 -> common01_textures`、`commonW3/W5/W6 -> commonW1 -> commonW2`），仅提升并等待本关实际需要的共享包，解决低配机器在 `common0*` 未加载完时提前进图或仅场景引用材质/贴图导致的资源缺失。
+- **同目录混装兼容与同路径兜底**：将 `Loader.dll` 与 `commonW*` 误装在 `OC2DIYLevel/` 同目录时不再重复加载同一批 `commonW*`，且 `DuplicateCommonDialog` 不再对同一磁盘路径（含同目录下的 `common04`）弹出要求清理文件的误报；跨目录存在两份同名 `common*` 时仍会正常警告，且优先加载 WLoader 侧的新包。
+
+## English
+
+Unifies `common0*` and `commonW*` shared dependency bundles onto the same equal-priority parallel background loader with full transitive dependency gating before level entry, and fixes false duplicate warnings when `OC2DIYLevelRuntimeWLoader` is co-located inside `OC2DIYLevel`.
+
+- **Equal-priority parallel loading for `common0*` and `commonW*`**: Startup synchronously loads only `common` (cover and templates). All remaining DIYLevel `common*` packs (`common01..04`, `common01_textures`) and taken-over WLoader `commonW*` packs are dispatched concurrently in the same frame at equal priority without blocking catalog publication, and each request settles as soon as it finishes.
+- **Pre-entry transitive dependency gating**: Before opening `info_*` or loading `LevelInfoSO` (covering host/single-player, gated client, and synchronous fallback entry paths), entry computes the full transitive closure of shared bundles referenced by the level's `info_*`, cross-set `info_*` dependencies, scene bundle, and shared-bundle-to-shared-bundle edges (e.g. `common02/03/04 -> common01 -> common01_textures`, `commonW3/W5/W6 -> commonW1 -> commonW2`), prioritizing and awaiting only the bundles that level needs — preventing missing recipes or scene-only textures/materials on slower machines.
+- **Co-located WLoader & same-path guard**: `Loader.dll` and `commonW*` placed inside `OC2DIYLevel/` are no longer loaded twice, and `DuplicateCommonDialog` skips warning dialogs when both paths resolve to the exact same file on disk (including co-located `common04`). Genuine cross-directory duplicates still show the warning dialog, while preferring WLoader's copy over a stale duplicate in `OC2DIYLevel/`.
+
 # 1.9.10
 
 ## 中文
