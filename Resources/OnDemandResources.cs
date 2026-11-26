@@ -39,6 +39,7 @@ namespace DIYLevelFastInit
             internal LevelInfoSO Level;
             internal string Path;
             internal bool Started;
+            internal DirectCoverRequest Direct;
         }
 
         private static readonly Dictionary<string, LoadedSet> Sets = new Dictionary<string, LoadedSet>(StringComparer.OrdinalIgnoreCase);

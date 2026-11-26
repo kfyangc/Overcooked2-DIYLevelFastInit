@@ -47,25 +47,31 @@ namespace DIYLevelFastInit
             // set still being converted keeps its previews suppressed.
             if (FastInitPlugin.InfoSetPreparing(path)) return false;
             if (_previewRequest != null && ReferenceEquals(_previewRequest.Image, __0)
-                && ReferenceEquals(_previewRequest.Level, level)) return false;
+                && ReferenceEquals(_previewRequest.Level, level)
+                && (_previewRunning || (__0.sprite != null && __0.gameObject.activeInHierarchy))) return false;
 
-            // Serve memory LRU hits synchronously on the same frame with zero I/O or flicker.
-            ThumbnailCache.Entry cached = ThumbnailCache.TryGetMemory(path, level.sceneName);
-            if (cached != null)
-            {
-                CancelDirectCoverRequest();
-                _previewRequest = new PreviewRequest { Image = __0, Level = level, Path = path, Started = true };
-                _previewPath = null;
-                _lastPreviewTime = Time.realtimeSinceStartup;
-                ThumbnailCache.Show(cached, __0);
-                ReleaseUnused();
-                FastInitPlugin.Log.LogInfo("thumbnail cache hit: " + level.sceneName + " (memory, 0 ms)");
-                return false;
-            }
-
+            // Always hide synchronously and apply the sprite on the next frame inside
+            // PreviewRoutine: callers such as DIYLevelSorting reset Image.sprite and
+            // activate the preview container immediately after PreviewPrefix returns,
+            // then treat (_boundKey != null && sprite == null) as an empty screenshot.
             CancelDirectCoverRequest();
             ThumbnailCache.Hide(__0);
-            _previewRequest = new PreviewRequest { Image = __0, Level = level, Path = path };
+
+            DirectCoverRequest direct = null;
+            if (ThumbnailCache.TryGetMemory(path, level.sceneName) == null)
+            {
+                // Start the managed background read immediately so it overlaps with the
+                // single-frame coalesce yield and is often ready on the very next frame.
+                string infoPath = ResolveInfoPath(path);
+                if (infoPath != null)
+                {
+                    direct = new DirectCoverRequest(infoPath, level.sceneName);
+                    _directCoverRequest = direct;
+                    direct.Start();
+                }
+            }
+
+            _previewRequest = new PreviewRequest { Image = __0, Level = level, Path = path, Direct = direct };
             _previewPath = path;
             _lastPreviewTime = Time.realtimeSinceStartup;
             if (_previewRunning || FastInitPlugin.Instance == null) return false;
@@ -87,11 +93,18 @@ namespace DIYLevelFastInit
             {
                 while (_previewRequest != null)
                 {
+                    // Yield one frame before checking activeInHierarchy or writing Image.sprite
+                    // so menu callers finish activating the preview container and resetting UI state.
+                    yield return null;
                     PreviewRequest request = _previewRequest;
                     if (request == null) break;
                     if (!PreviewIsCurrent(request))
                     {
-                        if (ReferenceEquals(_previewRequest, request)) _previewRequest = null;
+                        if (ReferenceEquals(_previewRequest, request))
+                        {
+                            _previewRequest = null;
+                            CancelDirectCoverRequest();
+                        }
                         break;
                     }
                     if (request.Started) break;
@@ -131,14 +144,18 @@ namespace DIYLevelFastInit
         private static IEnumerator LoadDirectPreview(PreviewRequest request, Box<bool> handled)
         {
             Stopwatch timer = Stopwatch.StartNew();
-            string infoPath = ResolveInfoPath(request.Path);
-            if (infoPath == null) yield break;
-
-            DirectCoverRequest direct = new DirectCoverRequest(infoPath, request.Level.sceneName);
-            _directCoverRequest = direct;
+            DirectCoverRequest direct = request.Direct;
+            request.Direct = null;
+            if (direct == null)
+            {
+                string infoPath = ResolveInfoPath(request.Path);
+                if (infoPath == null) yield break;
+                direct = new DirectCoverRequest(infoPath, request.Level.sceneName);
+                _directCoverRequest = direct;
+                direct.Start();
+            }
             try
             {
-                direct.Start();
                 while (!direct.Done && PreviewIsCurrent(request)) yield return null;
                 if (!PreviewIsCurrent(request))
                 {

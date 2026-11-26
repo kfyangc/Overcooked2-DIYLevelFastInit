@@ -274,16 +274,20 @@ Copy-Item -LiteralPath bin/Release/DIYLevelFastInit.dll -Destination "<GameDir>/
   The optional `OC2StageThumbnailPreview.Patches.PreviewController.UpdatePreview(Image,
   LevelInfoSO)` adapter is installed in `Start`. Cached previews use private copied
   sprites; an uncached preview temporarily retains at most one source set.
-- The thumbnail prefix must only serve pure in-memory LRU hits (`ThumbnailCache.TryGetMemory`)
-  or queue a background request and return; never call `Resolve`, synchronous `LoadSet`,
-  `LoadFromFile`, or `LoadAsset` from the menu callback.
-  `PreviewRoutine` first tries `DirectCoverReader` via a cancellable `DirectCoverRequest`
-  on the managed thread pool: it indexes bounded independent LZ4/raw UnityFS `info*` bundles
-  (caching lightweight per-set block/offset tables, never Unity assets), follows
-  `LevelInfoSO.screenshot` -> local `Sprite` -> local `Texture2D` (`.resS` or inline mip 0),
-  area-downscales uncompressed `RGB24`/`RGBA32`/`ARGB32`/`BGRA32` covers to at most
-  640 x 360 off the main thread, and passes compressed `DXT1`/`DXT5` payloads straight to
-  `Texture2D.LoadRawTextureData` + `Apply(false, true)` on the main thread. This avoids
+- The thumbnail prefix must always hide synchronously (`ThumbnailCache.Hide`), never
+  apply `ThumbnailCache.Show` synchronously or call `Resolve`, `LoadSet`, `LoadFromFile`,
+  or `LoadAsset` from the menu callback: callers such as `DIYLevelSorting` reset
+  `Image.sprite` and activate the preview container right after `PreviewPrefix` returns,
+  then treat `_boundKey != null && sprite == null` as an empty screenshot. On memory misses,
+  `PreviewPrefix` may immediately start a pure-managed `DirectCoverRequest` on the thread
+  pool so I/O overlaps with `PreviewRoutine`'s initial `yield return null` frame.
+  After yielding a frame, `PreviewRoutine` validates `PreviewIsCurrent`, serves memory LRU
+  hits directly, or consumes the `DirectCoverRequest` (`DirectCoverReader` indexes bounded
+  independent LZ4/raw UnityFS `info*` bundles, caches lightweight per-set block/offset
+  tables, follows `LevelInfoSO.screenshot` -> local `Sprite` -> local `Texture2D` `.resS`
+  or inline mip 0, area-downscales uncompressed `RGB24`/`RGBA32`/`ARGB32`/`BGRA32` covers
+  to at most 640 x 360 off the main thread, and passes `DXT1`/`DXT5` payloads straight to
+  `Texture2D.LoadRawTextureData` + `Apply(false, true)` on the main thread). This avoids
   native `AssetBundle` opens, `LevelInfoSO` graph loads, `ReadPixels`, `EncodeToPNG`, and
   `Resources.UnloadUnusedAssets()`.
   Unsupported cases (LZMA bundles, external cross-bundle sprites/textures, rotated packed
