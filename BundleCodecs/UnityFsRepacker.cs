@@ -9,6 +9,8 @@ namespace DIYLevelFastInit.BundleCodecs
     /// <summary>Streams bounded UnityFS v6 LZMA or LZ4/raw payloads into independent LZ4HC blocks.</summary>
     internal static class UnityFsRepacker
     {
+        internal enum SourceKind { Unsupported, AlreadyHighCompression, FastLayout, NeedsConversion }
+
         internal sealed class ConversionResult
         {
             internal byte[] SourceHash, DataHash, OutputHash;
@@ -183,7 +185,57 @@ namespace DIYLevelFastInit.BundleCodecs
             catch (System.Security.SecurityException) { return false; }
         }
 
+        // Single header read mirroring IsHighCompression -> IsEligible -> NeedsConversion.
+        internal static SourceKind Classify(string path)
+        {
+            try
+            {
+                using (FileStream stream = OpenSource(path))
+                {
+                    Layout layout = ReadContainerLayout(stream);
+                    bool allHighCompression = true;
+                    foreach (Block block in layout.Blocks)
+                    {
+                        if (block.Flags != 3 || block.Packed > (long)block.Plain + block.Plain / 255 + 16)
+                        {
+                            allHighCompression = false;
+                            break;
+                        }
+                    }
+                    if (allHighCompression) return SourceKind.AlreadyHighCompression;
+                    if (layout.Blocks.Count == 1 && (layout.Blocks[0].Flags & 63) == 1)
+                    {
+                        Block block = layout.Blocks[0];
+                        if ((block.Flags & ~127) != 0 || block.Packed < 10) return SourceKind.Unsupported;
+                        stream.Position = layout.DataStart;
+                        ValidateProperties(Exact(stream, 5));
+                        return SourceKind.NeedsConversion;
+                    }
+                    foreach (Block block in layout.Blocks)
+                    {
+                        int compression = block.Flags & 63;
+                        if ((block.Flags & ~127) != 0 || (compression != 0 && compression != 2 && compression != 3)
+                            || block.Plain > MaxMetadata || (compression == 0 && block.Packed != block.Plain)
+                            || block.Packed > (long)block.Plain + block.Plain / 255 + 16)
+                            return SourceKind.Unsupported;
+                    }
+                    return SourceKind.FastLayout;
+                }
+            }
+            catch (System.IO.IsolatedStorage.IsolatedStorageException) { return SourceKind.Unsupported; }
+            catch (IOException) { return SourceKind.Unsupported; }
+            catch (UnauthorizedAccessException) { return SourceKind.Unsupported; }
+            catch (ArgumentException) { return SourceKind.Unsupported; }
+            catch (NotSupportedException) { return SourceKind.Unsupported; }
+            catch (System.Security.SecurityException) { return SourceKind.Unsupported; }
+        }
+
         internal static void ValidateConverted(string source, string output, ConversionResult result, Func<bool> cancelled)
+        {
+            ValidateConverted(source, output, result, cancelled, true);
+        }
+
+        internal static void ValidateConverted(string source, string output, ConversionResult result, Func<bool> cancelled, bool verifySourceHash)
         {
             if (result == null || result.SourceLength <= 0 || result.SourceLength > MaxBytes
                 || result.OutputLength <= 0 || result.OutputLength > MaxBytes || result.DataLength <= 0
@@ -207,13 +259,15 @@ namespace DIYLevelFastInit.BundleCodecs
                     if (a.Offset != b.Offset || a.Size != b.Size || a.Flags != b.Flags || !Same(a.Name, b.Name))
                         throw new IOException("Converted UnityFS directory changed");
                 }
-                if (!Same(HashStream(input, before.SourceLength, cancelled, null), result.SourceHash)
-                    || !Same(HashStream(converted, after.SourceLength, cancelled, null), result.OutputHash))
+                if (verifySourceHash && !Same(HashStream(input, before.SourceLength, cancelled, null), result.SourceHash))
                     throw new IOException("Converted UnityFS file hash changed");
+                // Hash the full output file and verify every decoded HC block in a single sequential pass.
                 byte[] packed = new byte[ChunkSize + ChunkSize / 255 + 16], plain = new byte[ChunkSize];
-                converted.Position = after.DataStart;
-                using (SHA256 hash = SHA256.Create())
+                converted.Position = 0;
+                using (SHA256 outputHash = SHA256.Create())
+                using (SHA256 dataHash = SHA256.Create())
                 {
+                    HashRegion(converted, after.DataStart, outputHash, packed, cancelled);
                     for (int i = 0; i < after.Blocks.Count; i++)
                     {
                         Check(cancelled, null);
@@ -223,14 +277,33 @@ namespace DIYLevelFastInit.BundleCodecs
                             || block.Flags != 3) throw new IOException("Invalid converted UnityFS HC block");
                         int count = (int)block.Packed, length = (int)block.Plain;
                         ReadExact(converted, packed, count);
-                        if (block.Flags == 0) Buffer.BlockCopy(packed, 0, plain, 0, length);
-                        else DecodeLz4(packed, count, plain, length, true);
-                        hash.TransformBlock(plain, 0, length, plain, 0);
+                        outputHash.TransformBlock(packed, 0, count, packed, 0);
+                        DecodeLz4(packed, count, plain, length, true);
+                        dataHash.TransformBlock(plain, 0, length, plain, 0);
                     }
-                    hash.TransformFinalBlock(new byte[0], 0, 0);
-                    if (!Same(hash.Hash, result.DataHash)) throw new IOException("Converted UnityFS payload hash changed");
+                    long trailing = after.SourceLength - converted.Position;
+                    if (trailing < 0) throw new IOException("Converted UnityFS file hash changed");
+                    if (trailing > 0) HashRegion(converted, trailing, outputHash, packed, cancelled);
+                    if (converted.Length != after.SourceLength) throw new IOException("Converted UnityFS file hash changed");
+                    outputHash.TransformFinalBlock(new byte[0], 0, 0);
+                    dataHash.TransformFinalBlock(new byte[0], 0, 0);
+                    if (!Same(outputHash.Hash, result.OutputHash)) throw new IOException("Converted UnityFS file hash changed");
+                    if (!Same(dataHash.Hash, result.DataHash)) throw new IOException("Converted UnityFS payload hash changed");
                 }
                 Check(cancelled, null);
+            }
+        }
+
+        private static void HashRegion(Stream stream, long length, SHA256 hash, byte[] buffer, Func<bool> cancelled)
+        {
+            long remaining = length;
+            while (remaining > 0)
+            {
+                Check(cancelled, null);
+                int read = stream.Read(buffer, 0, (int)Math.Min(buffer.Length, remaining));
+                if (read == 0) throw new IOException("File truncated during hashing");
+                hash.TransformBlock(buffer, 0, read, buffer, 0);
+                remaining -= read;
             }
         }
 
@@ -500,8 +573,16 @@ namespace DIYLevelFastInit.BundleCodecs
                 int match = Lz4Length(packed, ref source, token & 15, packedLength) + 4;
                 if (match > length - target) throw new IOException("Invalid LZ4 match");
                 lastMatch = target;
-                int end = target + match;
-                while (target < end) { bytes[target] = bytes[target - distance]; target++; }
+                if (distance >= match && match >= 8)
+                {
+                    Buffer.BlockCopy(bytes, target - distance, bytes, target, match);
+                    target += match;
+                }
+                else
+                {
+                    int end = target + match;
+                    while (target < end) { bytes[target] = bytes[target - distance]; target++; }
+                }
             }
             if (target != length) throw new IOException("LZ4 metadata length mismatch");
             if (strictEnd && (finalLiterals < Math.Min(5, length) || (lastMatch >= 0 && lastMatch > length - 12)))
